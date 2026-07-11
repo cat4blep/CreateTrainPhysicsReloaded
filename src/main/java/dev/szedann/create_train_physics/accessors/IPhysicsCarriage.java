@@ -7,4 +7,7 @@ public interface IPhysicsCarriage {
     void railways$setMass(int mass);
     @Nullable Integer trainphys$getEngineCount();
     void trainphys$setEngineCount(int engineCount);
+    @Nullable Integer trainphys$getElectricEngineCount();
+    void trainphys$setElectricEngineCount(int engineCount);
+    void trainphys$markEngineCountsForRefresh();
 }

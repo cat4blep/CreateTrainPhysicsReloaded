@@ -15,6 +15,14 @@ public class Config {
 
     private static final ModConfigSpec.IntValue ENGINE_POWER = BUILDER.comment("Power of an engine in kW").defineInRange("enginePower", 200, 0, Integer.MAX_VALUE);
 
+    private static final ModConfigSpec.IntValue FUELED_ENGINE_POWER = BUILDER
+            .comment("Power of a fueled combustion engine in kW")
+            .defineInRange("fueledEnginePower", 200, 0, Integer.MAX_VALUE);
+
+    private static final ModConfigSpec.BooleanValue AUTOMATIC_HANDBRAKE = BUILDER
+            .comment("Brake unattended trains and hold automatic trains at a requested stop")
+            .define("automaticHandbrake", true);
+
 //    public static final ModConfigSpec.ConfigValue<String> MAGIC_NUMBER_INTRODUCTION = BUILDER.comment("What you want the introduction message to be for the magic number").define("magicNumberIntroduction", "The magic number is... ");
 
     // a list of strings that are treated as resource locations for items
@@ -24,6 +32,8 @@ public class Config {
 
     public static boolean requireFuel;
     public static int enginePower;
+    public static int fueledEnginePower;
+    public static boolean automaticHandbrake;
 //    public static String magicNumberIntroduction;
 //    public static Set<Item> items;
 
@@ -35,6 +45,8 @@ public class Config {
     static void onLoad(final ModConfigEvent event) {
         requireFuel = REQUIRE_FUEL.get();
         enginePower = ENGINE_POWER.get();
+        fueledEnginePower = FUELED_ENGINE_POWER.get();
+        automaticHandbrake = AUTOMATIC_HANDBRAKE.get();
 //        magicNumberIntroduction = MAGIC_NUMBER_INTRODUCTION.get();
 
         // convert the list of strings into a set of items

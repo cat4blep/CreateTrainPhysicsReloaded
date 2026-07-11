@@ -15,21 +15,26 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-import java.util.concurrent.atomic.AtomicInteger;
-
+import static dev.szedann.create_train_physics.CreateTrainPhysics.CEE_MOTOR_TAG;
 import static dev.szedann.create_train_physics.CreateTrainPhysics.MOTOR_TAG;
 
 
 @Mixin(value = Carriage.class, remap = false)
 public abstract class MixinCarriage implements IPhysicsCarriage {
+    @Unique
+    private static final int TRAINPHYS_ENGINE_COUNT_VERSION = 2;
+
     @Shadow
     public abstract CarriageContraptionEntity anyAvailableEntity();
 
     @Unique
     private @Nullable Integer railways$mass = null;
     @Unique
-
     private @Nullable Integer trainphys$engineCount = null;
+    @Unique
+    private @Nullable Integer trainphys$electricEngineCount = null;
+    @Unique
+    private boolean trainphys$engineCountsNeedRefresh = false;
 
     @Inject(method = "write", at = @At("RETURN"))
     private void writeMassAndEngineCount(DimensionPalette dimensions, HolderLookup.Provider registries, CallbackInfoReturnable<CompoundTag> cir){
@@ -40,6 +45,13 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
         Integer engineCount = trainphys$getEngineCount();
         if(engineCount != null)
             tag.putInt("engineCount", engineCount);
+        Integer electricEngineCount = trainphys$getElectricEngineCount();
+        if(electricEngineCount != null)
+            tag.putInt("electricEngineCount", electricEngineCount);
+        if (!trainphys$engineCountsNeedRefresh
+                && engineCount != null
+                && electricEngineCount != null)
+            tag.putInt("engineCountVersion", TRAINPHYS_ENGINE_COUNT_VERSION);
     }
 
     @Inject(method = "read", at = @At("RETURN"))
@@ -48,15 +60,31 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
 
         if(tag.contains("mass", CompoundTag.TAG_INT))
             carriage.railways$setMass(tag.getInt("mass"));
-        if(tag.contains("engineCount", CompoundTag.TAG_INT))
-            carriage.trainphys$setEngineCount(tag.getInt("engineCount"));
+        if(tag.contains("engineCount", CompoundTag.TAG_INT)) {
+            int engineCount = tag.getInt("engineCount");
+            carriage.trainphys$setEngineCount(engineCount);
+            if(tag.contains("electricEngineCount", CompoundTag.TAG_INT))
+                carriage.trainphys$setElectricEngineCount(tag.getInt("electricEngineCount"));
+            else
+                // C:EE has persisted this boolean since its first release.
+                // Treating all legacy engines as electric is a safe fallback
+                // until a carriage entity is present and can be rescanned.
+                carriage.trainphys$setElectricEngineCount(
+                        tag.getBoolean("CEEHasElectricMotor") ? engineCount : 0
+                );
+            // Persisted values remain a fallback for unloaded trains, but an
+            // available entity is rescanned once so datapack tag changes and
+            // add-on updates affect existing consists after a restart.
+            carriage.trainphys$markEngineCountsForRefresh();
+        }
     }
 
     @Override
     public @Nullable Integer railways$getMass(){
         if(railways$mass == null || railways$mass == 0) {
             CarriageContraptionEntity entity = anyAvailableEntity();
-            if(entity != null) railways$mass = entity.getContraption().getBlocks().size();
+            if(entity != null && entity.getContraption() != null)
+                railways$mass = entity.getContraption().getBlocks().size();
         }
         return railways$mass;
     }
@@ -67,24 +95,52 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
 
     @Override
     public @Nullable Integer trainphys$getEngineCount() {
-        if(trainphys$engineCount == null || trainphys$engineCount == 0) {
-            CarriageContraptionEntity entity = anyAvailableEntity();
-            if(entity != null){
-                AtomicInteger engineCount = new AtomicInteger();
-
-                entity.getContraption().getBlocks().forEach((p, b) -> {
-                    if(b.state().getBlock().defaultBlockState().is(MOTOR_TAG)){
-                        engineCount.getAndIncrement();
-                    }
-                });
-                trainphys$setEngineCount(engineCount.get());
-            }
-        }
+        trainphys$scanEnginesIfNeeded();
         return trainphys$engineCount;
     }
 
     @Override
     public void trainphys$setEngineCount(int engineCount) {
         trainphys$engineCount = engineCount;
+    }
+
+    @Override
+    public @Nullable Integer trainphys$getElectricEngineCount() {
+        trainphys$scanEnginesIfNeeded();
+        return trainphys$electricEngineCount;
+    }
+
+    @Override
+    public void trainphys$setElectricEngineCount(int engineCount) {
+        trainphys$electricEngineCount = engineCount;
+    }
+
+    @Override
+    public void trainphys$markEngineCountsForRefresh() {
+        trainphys$engineCountsNeedRefresh = true;
+    }
+
+    @Unique
+    private void trainphys$scanEnginesIfNeeded() {
+        if (trainphys$engineCount != null
+                && trainphys$electricEngineCount != null
+                && !trainphys$engineCountsNeedRefresh)
+            return;
+
+        CarriageContraptionEntity entity = anyAvailableEntity();
+        if (entity == null || entity.getContraption() == null)
+            return;
+
+        int engineCount = 0;
+        int electricEngineCount = 0;
+        for (var blockInfo : entity.getContraption().getBlocks().values()) {
+            if (blockInfo.state().is(MOTOR_TAG))
+                engineCount++;
+            if (blockInfo.state().is(CEE_MOTOR_TAG))
+                electricEngineCount++;
+        }
+        trainphys$engineCount = engineCount;
+        trainphys$electricEngineCount = electricEngineCount;
+        trainphys$engineCountsNeedRefresh = false;
     }
 }

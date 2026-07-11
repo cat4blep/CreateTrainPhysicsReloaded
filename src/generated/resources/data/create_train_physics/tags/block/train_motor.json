@@ -1,0 +1,61 @@
+{
+  "values": [
+    "create:steam_engine",
+    {
+      "id": "#electroenergetics:train_electric_motor",
+      "required": false
+    },
+    {
+      "id": "createaddition:electric_motor",
+      "required": false
+    },
+    {
+      "id": "createdieselgenerators:diesel_engine",
+      "required": false
+    },
+    {
+      "id": "createdieselgenerators:large_diesel_engine",
+      "required": false
+    },
+    {
+      "id": "createdieselgenerators:huge_diesel_engine",
+      "required": false
+    },
+    {
+      "id": "powergrid:electric_motor",
+      "required": false
+    },
+    {
+      "id": "powergrid:constant_speed_motor",
+      "required": false
+    },
+    {
+      "id": "tfmg:turbine_engine",
+      "required": false
+    },
+    {
+      "id": "tfmg:regular_engine",
+      "required": false
+    },
+    {
+      "id": "tfmg:radial_engine",
+      "required": false
+    },
+    {
+      "id": "tfmg:large_engine",
+      "required": false
+    },
+    {
+      "id": "tfmg:simple_large_engine",
+      "required": false
+    },
+    {
+      "id": "tfmg:electric_motor",
+      "required": false
+    },
+    {
+      "id": "tfmg:heavy_electric_motor",
+      "required": false
+    }
+  ]
+}

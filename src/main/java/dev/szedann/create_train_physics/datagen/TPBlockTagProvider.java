@@ -31,9 +31,20 @@ public class TPBlockTagProvider extends BlockTagsProvider {
         // Create a tag builder for our tag. This could also be e.g. a vanilla or NeoForge tag.
         tag(MOTOR_TAG)
                 .add(AllBlocks.STEAM_ENGINE.get())
-                .addOptional(ResourceLocation.fromNamespaceAndPath("electroenergetics","electric_motor"))
+                .addOptionalTag(ResourceLocation.fromNamespaceAndPath("electroenergetics","train_electric_motor"))
                 .addOptional(ResourceLocation.fromNamespaceAndPath("createaddition","electric_motor"))
-                .addOptional(ResourceLocation.fromNamespaceAndPath("createdieselgenerators","diesel_engine"));
+                .addOptional(ResourceLocation.fromNamespaceAndPath("createdieselgenerators","diesel_engine"))
+                .addOptional(ResourceLocation.fromNamespaceAndPath("createdieselgenerators","large_diesel_engine"))
+                .addOptional(ResourceLocation.fromNamespaceAndPath("createdieselgenerators","huge_diesel_engine"))
+                .addOptional(ResourceLocation.fromNamespaceAndPath("powergrid","electric_motor"))
+                .addOptional(ResourceLocation.fromNamespaceAndPath("powergrid","constant_speed_motor"))
+                .addOptional(ResourceLocation.fromNamespaceAndPath("tfmg","turbine_engine"))
+                .addOptional(ResourceLocation.fromNamespaceAndPath("tfmg","regular_engine"))
+                .addOptional(ResourceLocation.fromNamespaceAndPath("tfmg","radial_engine"))
+                .addOptional(ResourceLocation.fromNamespaceAndPath("tfmg","large_engine"))
+                .addOptional(ResourceLocation.fromNamespaceAndPath("tfmg","simple_large_engine"))
+                .addOptional(ResourceLocation.fromNamespaceAndPath("tfmg","electric_motor"))
+                .addOptional(ResourceLocation.fromNamespaceAndPath("tfmg","heavy_electric_motor"));
 
     }
 }
