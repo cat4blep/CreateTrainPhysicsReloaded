@@ -1,8 +1,10 @@
 package dev.szedann.create_train_physics.mixin;
 
+import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.simibubi.create.Create;
+import com.simibubi.create.api.contraption.storage.item.MountedItemStorageWrapper;
 import com.simibubi.create.content.trains.entity.Carriage;
 import com.simibubi.create.content.trains.entity.Navigation;
 import com.simibubi.create.content.trains.entity.Train;
@@ -18,6 +20,7 @@ import dev.szedann.create_train_physics.compat.ElectroEnergeticsCompat;
 import dev.szedann.create_train_physics.compat.SteamNRailsCompat;
 import dev.szedann.create_train_physics.physics.TractionPolicy;
 import dev.szedann.create_train_physics.physics.TrainFuelLedger;
+import dev.szedann.create_train_physics.physics.TrainFuelSelection;
 import dev.szedann.create_train_physics.physics.TrainPhysicsMath;
 import dev.szedann.create_train_physics.physics.TrainPowerPolicy;
 import net.createmod.catnip.data.Iterate;
@@ -267,6 +270,14 @@ public abstract class MixinTrain implements IPhysicsTrain {
     }
 
     @Unique
+    private int railways$getCarriageUnverifiedElectricEngineCount(Carriage carriage){
+        Integer engineCount = ((IPhysicsCarriage)carriage)
+                .trainphys$getUnverifiedElectricEngineCount();
+        if(engineCount == null) engineCount = 0;
+        return Math.max(0, engineCount);
+    }
+
+    @Unique
     private int railways$getEngineCount(){
         long count = carriages.stream().mapToLong(this::railways$getCarriageEngineCount).sum();
         return (int) Math.min(Integer.MAX_VALUE, count);
@@ -279,14 +290,30 @@ public abstract class MixinTrain implements IPhysicsTrain {
     }
 
     @Unique
+    private int railways$getUnverifiedElectricEngineCount(){
+        long count = carriages.stream()
+                .mapToLong(this::railways$getCarriageUnverifiedElectricEngineCount)
+                .sum();
+        return (int) Math.min(Integer.MAX_VALUE, count);
+    }
+
+    @Unique
     private int railways$getPower(){
         int allEngines = railways$getEngineCount();
-        int electricEngines = Math.min(railways$getElectricEngineCount(), allEngines);
-        boolean electricPowered = electricEngines > 0
+        int verifiedElectricEngines = Math.min(
+                railways$getElectricEngineCount(),
+                allEngines
+        );
+        int unverifiedElectricEngines = Math.min(
+                railways$getUnverifiedElectricEngineCount(),
+                allEngines - verifiedElectricEngines
+        );
+        boolean electricPowered = verifiedElectricEngines > 0
                 && ElectroEnergeticsCompat.isPowered(railways$self());
         return TrainPowerPolicy.availablePowerWatts(
                 allEngines,
-                electricEngines,
+                verifiedElectricEngines,
+                unverifiedElectricEngines,
                 Config.requireFuel,
                 railways$hasCombustionFuel(),
                 electricPowered,
@@ -297,10 +324,21 @@ public abstract class MixinTrain implements IPhysicsTrain {
 
     @Unique
     private int railways$getCombustionPower() {
-        int combustionEngines = Math.max(0,
-                railways$getEngineCount() - railways$getElectricEngineCount());
+        int allEngines = railways$getEngineCount();
+        int verifiedElectricEngines = Math.min(
+                railways$getElectricEngineCount(),
+                allEngines
+        );
+        int unverifiedElectricEngines = Math.min(
+                railways$getUnverifiedElectricEngineCount(),
+                allEngines - verifiedElectricEngines
+        );
+        int combustionEngines = allEngines
+                - verifiedElectricEngines
+                - unverifiedElectricEngines;
         return TrainPowerPolicy.availablePowerWatts(
                 combustionEngines,
+                0,
                 0,
                 Config.requireFuel,
                 railways$hasCombustionFuel(),
@@ -657,8 +695,17 @@ public abstract class MixinTrain implements IPhysicsTrain {
         }
 
         int allEngines = railways$getEngineCount();
-        int electricEngines = railways$getElectricEngineCount();
-        int combustionEngines = Math.max(0, allEngines - electricEngines);
+        int electricEngines = Math.min(
+                railways$getElectricEngineCount(),
+                allEngines
+        );
+        int unverifiedElectricEngines = Math.min(
+                railways$getUnverifiedElectricEngineCount(),
+                allEngines - electricEngines
+        );
+        int combustionEngines = allEngines
+                - electricEngines
+                - unverifiedElectricEngines;
 
         // An electric-only train must never consume an inventory fuel item.
         // Still let Create decrement C:EE's short compatibility lease.
@@ -689,10 +736,25 @@ public abstract class MixinTrain implements IPhysicsTrain {
                 ? fuelTicks
                 : 0;
         fuelTicks = 0;
+
+        // S&R normally drains every liquid-fuel carriage and then lets Create
+        // consume a solid item as well. Acquire one liquid portion ourselves
+        // and end this refill event before either duplicate path can run.
+        int liquidFuelTicks = SteamNRailsCompat.drainOneLiquidFuel(railways$self());
+        if (liquidFuelTicks > 0) {
+            fuelTicks = liquidFuelTicks;
+            trainphys$finishFuelAcquisition();
+            ci.cancel();
+        }
     }
 
     @Inject(method = "burnFuel", at = @At("RETURN"))
     public void trainphys$finishFuelInventoryScan(CallbackInfo ci) {
+        trainphys$finishFuelAcquisition();
+    }
+
+    @Unique
+    private void trainphys$finishFuelAcquisition() {
         if (trainphys$pendingElectricLease < 0)
             return;
 
@@ -712,6 +774,25 @@ public abstract class MixinTrain implements IPhysicsTrain {
         // Match vanilla's one-tick lease decay when no real fuel was found.
         fuelTicks = Math.max(0, trainphys$pendingElectricLease - 1);
         trainphys$pendingElectricLease = -1;
+    }
+
+    /**
+     * Compatibility safety net for S&R versions whose reflective liquid bridge
+     * is unavailable: once any liquid mixin has supplied fuel, Create's solid
+     * inventory scan becomes ineligible for this refill event. The supported
+     * bridge above is still required to stop S&R from draining several tanks.
+     */
+    @ModifyExpressionValue(
+            method = "burnFuel",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lcom/simibubi/create/content/contraptions/minecart/TrainCargoManager;getFuelItems()Lcom/simibubi/create/api/contraption/storage/item/MountedItemStorageWrapper;"
+            )
+    )
+    private MountedItemStorageWrapper trainphys$skipSolidFuelAfterLiquid(
+            MountedItemStorageWrapper fuelItems
+    ) {
+        return TrainFuelSelection.mayUseSolidFuel(fuelTicks) ? fuelItems : null;
     }
 
     @Unique

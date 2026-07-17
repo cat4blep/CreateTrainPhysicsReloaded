@@ -10,16 +10,24 @@ public final class TrainPowerPolicy {
 
     public static int availablePowerWatts(
             int totalEngines,
-            int electricEngines,
+            int verifiedElectricEngines,
+            int unverifiedElectricEngines,
             boolean requireFuel,
             boolean combustionFueled,
-            boolean electricPowered,
+            boolean verifiedElectricPowered,
             int enginePowerKilowatts,
             int fueledEnginePowerKilowatts
     ) {
         int total = Math.max(0, totalEngines);
-        int electric = Math.min(Math.max(0, electricEngines), total);
-        int combustion = total - electric;
+        int verifiedElectric = Math.min(
+                Math.max(0, verifiedElectricEngines),
+                total
+        );
+        int unverifiedElectric = Math.min(
+                Math.max(0, unverifiedElectricEngines),
+                total - verifiedElectric
+        );
+        int combustion = total - verifiedElectric - unverifiedElectric;
 
         long power = 0;
         if (!requireFuel || combustionFueled) {
@@ -28,8 +36,12 @@ public final class TrainPowerPolicy {
                     : enginePowerKilowatts;
             power += powerFromEngines(combustion, perEngine);
         }
-        if (electricPowered)
-            power += powerFromEngines(electric, enginePowerKilowatts);
+        if (verifiedElectricPowered)
+            power += powerFromEngines(verifiedElectric, enginePowerKilowatts);
+        // These add-ons expose no assembled-train power API. Preserve their
+        // historical configured power, but never make them burn solid/liquid
+        // fuel or receive fueledEnginePower.
+        power += powerFromEngines(unverifiedElectric, enginePowerKilowatts);
 
         return (int) Math.min(Integer.MAX_VALUE, power);
     }

@@ -59,6 +59,22 @@ public class CreateTrainPhysics {
             ResourceLocation.fromNamespaceAndPath(CEE_MODID, "train_electric_motor")
     );
 
+    /**
+     * Electric train motors whose assembled-train power state cannot currently
+     * be queried. They retain configured power but never consume combustion
+     * fuel. C:EE motors are tracked separately because their power is verified.
+     */
+    public static final TagKey<Block> UNVERIFIED_ELECTRIC_MOTOR_TAG = TagKey.create(
+            Registries.BLOCK,
+            ResourceLocation.fromNamespaceAndPath(MODID, "unverified_electric_train_motor")
+    );
+
+    /** Blocks that may carry a Create steam engine as part of a train build. */
+    public static final TagKey<Block> STEAM_ENGINE_MOUNT_TAG = TagKey.create(
+            Registries.BLOCK,
+            ResourceLocation.fromNamespaceAndPath(MODID, "steam_engine_mount")
+    );
+
     // The constructor for the mod class is the first code that is run when your mod is loaded.
     // FML will recognize some parameter types like IEventBus or ModContainer and pass them in automatically.
     public CreateTrainPhysics(IEventBus modEventBus, ModContainer modContainer) {

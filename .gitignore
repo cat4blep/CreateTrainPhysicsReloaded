@@ -115,5 +115,8 @@ gradle-app.setting
 run/
 runs/
 
+# NeoForge data-generator hash cache (generated resources themselves stay tracked)
+src/generated/resources/.cache/
+
 # Avoid ignoring Gradle wrapper jar file (.jar files are usually ignored)
 !gradle-wrapper.jar

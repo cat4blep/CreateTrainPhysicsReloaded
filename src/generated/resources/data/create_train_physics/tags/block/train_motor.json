@@ -5,10 +5,7 @@
       "id": "#electroenergetics:train_electric_motor",
       "required": false
     },
-    {
-      "id": "createaddition:electric_motor",
-      "required": false
-    },
+    "#create_train_physics:unverified_electric_train_motor",
     {
       "id": "createdieselgenerators:diesel_engine",
       "required": false
@@ -19,14 +16,6 @@
     },
     {
       "id": "createdieselgenerators:huge_diesel_engine",
-      "required": false
-    },
-    {
-      "id": "powergrid:electric_motor",
-      "required": false
-    },
-    {
-      "id": "powergrid:constant_speed_motor",
       "required": false
     },
     {
@@ -47,14 +36,6 @@
     },
     {
       "id": "tfmg:simple_large_engine",
-      "required": false
-    },
-    {
-      "id": "tfmg:electric_motor",
-      "required": false
-    },
-    {
-      "id": "tfmg:heavy_electric_motor",
       "required": false
     }
   ]

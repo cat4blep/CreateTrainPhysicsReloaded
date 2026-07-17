@@ -9,5 +9,7 @@ public interface IPhysicsCarriage {
     void trainphys$setEngineCount(int engineCount);
     @Nullable Integer trainphys$getElectricEngineCount();
     void trainphys$setElectricEngineCount(int engineCount);
+    @Nullable Integer trainphys$getUnverifiedElectricEngineCount();
+    void trainphys$setUnverifiedElectricEngineCount(int engineCount);
     void trainphys$markEngineCountsForRefresh();
 }

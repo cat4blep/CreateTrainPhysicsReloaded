@@ -1,0 +1,24 @@
+{
+  "values": [
+    {
+      "id": "createaddition:electric_motor",
+      "required": false
+    },
+    {
+      "id": "powergrid:electric_motor",
+      "required": false
+    },
+    {
+      "id": "powergrid:constant_speed_motor",
+      "required": false
+    },
+    {
+      "id": "tfmg:electric_motor",
+      "required": false
+    },
+    {
+      "id": "tfmg:heavy_electric_motor",
+      "required": false
+    }
+  ]
+}

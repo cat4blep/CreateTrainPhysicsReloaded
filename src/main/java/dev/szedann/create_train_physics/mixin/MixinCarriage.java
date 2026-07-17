@@ -5,8 +5,15 @@ import com.simibubi.create.content.trains.entity.CarriageContraptionEntity;
 import com.simibubi.create.content.trains.graph.DimensionPalette;
 import com.simibubi.create.content.trains.graph.TrackGraph;
 import dev.szedann.create_train_physics.accessors.IPhysicsCarriage;
+import net.minecraft.core.HolderGetter;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.NbtUtils;
+import net.minecraft.nbt.Tag;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -17,12 +24,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import static dev.szedann.create_train_physics.CreateTrainPhysics.CEE_MOTOR_TAG;
 import static dev.szedann.create_train_physics.CreateTrainPhysics.MOTOR_TAG;
+import static dev.szedann.create_train_physics.CreateTrainPhysics.UNVERIFIED_ELECTRIC_MOTOR_TAG;
 
 
 @Mixin(value = Carriage.class, remap = false)
 public abstract class MixinCarriage implements IPhysicsCarriage {
     @Unique
-    private static final int TRAINPHYS_ENGINE_COUNT_VERSION = 2;
+    private static final int TRAINPHYS_ENGINE_COUNT_VERSION = 3;
 
     @Shadow
     public abstract CarriageContraptionEntity anyAvailableEntity();
@@ -33,6 +41,8 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
     private @Nullable Integer trainphys$engineCount = null;
     @Unique
     private @Nullable Integer trainphys$electricEngineCount = null;
+    @Unique
+    private @Nullable Integer trainphys$unverifiedElectricEngineCount = null;
     @Unique
     private boolean trainphys$engineCountsNeedRefresh = false;
 
@@ -48,9 +58,13 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
         Integer electricEngineCount = trainphys$getElectricEngineCount();
         if(electricEngineCount != null)
             tag.putInt("electricEngineCount", electricEngineCount);
+        Integer unverifiedElectricEngineCount = trainphys$getUnverifiedElectricEngineCount();
+        if(unverifiedElectricEngineCount != null)
+            tag.putInt("unverifiedElectricEngineCount", unverifiedElectricEngineCount);
         if (!trainphys$engineCountsNeedRefresh
                 && engineCount != null
-                && electricEngineCount != null)
+                && electricEngineCount != null
+                && unverifiedElectricEngineCount != null)
             tag.putInt("engineCountVersion", TRAINPHYS_ENGINE_COUNT_VERSION);
     }
 
@@ -60,7 +74,12 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
 
         if(tag.contains("mass", CompoundTag.TAG_INT))
             carriage.railways$setMass(tag.getInt("mass"));
-        if(tag.contains("engineCount", CompoundTag.TAG_INT)) {
+        boolean restoredFromContraption = trainphys$restoreSerializedEngineCounts(
+                tag,
+                registries,
+                carriage
+        );
+        if(!restoredFromContraption && tag.contains("engineCount", CompoundTag.TAG_INT)) {
             int engineCount = tag.getInt("engineCount");
             carriage.trainphys$setEngineCount(engineCount);
             if(tag.contains("electricEngineCount", CompoundTag.TAG_INT))
@@ -72,11 +91,89 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
                 carriage.trainphys$setElectricEngineCount(
                         tag.getBoolean("CEEHasElectricMotor") ? engineCount : 0
                 );
-            // Persisted values remain a fallback for unloaded trains, but an
-            // available entity is rescanned once so datapack tag changes and
-            // add-on updates affect existing consists after a restart.
+            carriage.trainphys$setUnverifiedElectricEngineCount(
+                    tag.contains("unverifiedElectricEngineCount", CompoundTag.TAG_INT)
+                            ? tag.getInt("unverifiedElectricEngineCount")
+                            : 0
+            );
+        }
+        if(restoredFromContraption || tag.contains("engineCount", CompoundTag.TAG_INT)) {
+            // Exact serialized counts keep legacy automated trains moving even
+            // while their chunks are unloaded. Rescan once an entity appears
+            // so live datapack tag changes still take effect.
             carriage.trainphys$markEngineCountsForRefresh();
         }
+    }
+
+    @Unique
+    private static boolean trainphys$restoreSerializedEngineCounts(
+            CompoundTag carriageTag,
+            HolderLookup.Provider registries,
+            IPhysicsCarriage carriage
+    ) {
+        try {
+            Tag blocksTag = carriageTag.getCompound("Entity")
+                    .getCompound("Contraption")
+                    .get("Blocks");
+            HolderGetter<Block> blockLookup = registries.lookupOrThrow(Registries.BLOCK);
+            int[] counts = new int[3];
+
+            if (blocksTag instanceof CompoundTag palettedBlocks) {
+                if (!palettedBlocks.contains("Palette", Tag.TAG_LIST)
+                        || !palettedBlocks.contains("BlockList", Tag.TAG_LIST))
+                    return false;
+
+                ListTag paletteTag = palettedBlocks.getList("Palette", Tag.TAG_COMPOUND);
+                ListTag blockList = palettedBlocks.getList("BlockList", Tag.TAG_COMPOUND);
+                if (paletteTag.isEmpty() || blockList.isEmpty())
+                    return false;
+
+                BlockState[] palette = new BlockState[paletteTag.size()];
+                for (int i = 0; i < paletteTag.size(); i++)
+                    palette[i] = NbtUtils.readBlockState(blockLookup, paletteTag.getCompound(i));
+
+                for (int i = 0; i < blockList.size(); i++) {
+                    int stateId = blockList.getCompound(i).getInt("State");
+                    if (stateId < 0 || stateId >= palette.length)
+                        return false;
+                    trainphys$countEngineState(palette[stateId], counts);
+                }
+            } else if (blocksTag instanceof ListTag legacyBlocks) {
+                if (legacyBlocks.isEmpty())
+                    return false;
+                for (int i = 0; i < legacyBlocks.size(); i++) {
+                    CompoundTag block = legacyBlocks.getCompound(i);
+                    if (!block.contains("Block", Tag.TAG_COMPOUND))
+                        return false;
+                    trainphys$countEngineState(
+                            NbtUtils.readBlockState(blockLookup, block.getCompound("Block")),
+                            counts
+                    );
+                }
+            } else {
+                return false;
+            }
+
+            carriage.trainphys$setEngineCount(counts[0]);
+            carriage.trainphys$setElectricEngineCount(counts[1]);
+            carriage.trainphys$setUnverifiedElectricEngineCount(counts[2]);
+            return true;
+        } catch (RuntimeException exception) {
+            // Corrupt or foreign serialized data falls back to persisted v2/v3
+            // counts and is rescanned when a carriage entity becomes available.
+            return false;
+        }
+    }
+
+    @Unique
+    private static void trainphys$countEngineState(BlockState state, int[] counts) {
+        if (!state.is(MOTOR_TAG))
+            return;
+        counts[0]++;
+        if (state.is(CEE_MOTOR_TAG))
+            counts[1]++;
+        else if (state.is(UNVERIFIED_ELECTRIC_MOTOR_TAG))
+            counts[2]++;
     }
 
     @Override
@@ -116,6 +213,17 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
     }
 
     @Override
+    public @Nullable Integer trainphys$getUnverifiedElectricEngineCount() {
+        trainphys$scanEnginesIfNeeded();
+        return trainphys$unverifiedElectricEngineCount;
+    }
+
+    @Override
+    public void trainphys$setUnverifiedElectricEngineCount(int engineCount) {
+        trainphys$unverifiedElectricEngineCount = engineCount;
+    }
+
+    @Override
     public void trainphys$markEngineCountsForRefresh() {
         trainphys$engineCountsNeedRefresh = true;
     }
@@ -124,6 +232,7 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
     private void trainphys$scanEnginesIfNeeded() {
         if (trainphys$engineCount != null
                 && trainphys$electricEngineCount != null
+                && trainphys$unverifiedElectricEngineCount != null
                 && !trainphys$engineCountsNeedRefresh)
             return;
 
@@ -133,14 +242,20 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
 
         int engineCount = 0;
         int electricEngineCount = 0;
+        int unverifiedElectricEngineCount = 0;
         for (var blockInfo : entity.getContraption().getBlocks().values()) {
-            if (blockInfo.state().is(MOTOR_TAG))
-                engineCount++;
-            if (blockInfo.state().is(CEE_MOTOR_TAG))
+            if (!blockInfo.state().is(MOTOR_TAG))
+                continue;
+            engineCount++;
+            if (blockInfo.state().is(CEE_MOTOR_TAG)) {
                 electricEngineCount++;
+            } else if (blockInfo.state().is(UNVERIFIED_ELECTRIC_MOTOR_TAG)) {
+                unverifiedElectricEngineCount++;
+            }
         }
         trainphys$engineCount = engineCount;
         trainphys$electricEngineCount = electricEngineCount;
+        trainphys$unverifiedElectricEngineCount = unverifiedElectricEngineCount;
         trainphys$engineCountsNeedRefresh = false;
     }
 }

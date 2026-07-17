@@ -1,0 +1,8 @@
+{
+  "values": [
+    {
+      "id": "railways:fuel_tank",
+      "required": false
+    }
+  ]
+}
