@@ -7,11 +7,14 @@ import com.simibubi.create.content.trains.graph.TrackGraph;
 import dev.szedann.create_train_physics.accessors.IPhysicsCarriage;
 import net.minecraft.core.HolderGetter;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.NbtUtils;
+import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
@@ -22,6 +25,9 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
+import java.util.HashSet;
+import java.util.Set;
+
 import static dev.szedann.create_train_physics.CreateTrainPhysics.CEE_MOTOR_TAG;
 import static dev.szedann.create_train_physics.CreateTrainPhysics.MOTOR_TAG;
 import static dev.szedann.create_train_physics.CreateTrainPhysics.UNVERIFIED_ELECTRIC_MOTOR_TAG;
@@ -30,7 +36,7 @@ import static dev.szedann.create_train_physics.CreateTrainPhysics.UNVERIFIED_ELE
 @Mixin(value = Carriage.class, remap = false)
 public abstract class MixinCarriage implements IPhysicsCarriage {
     @Unique
-    private static final int TRAINPHYS_ENGINE_COUNT_VERSION = 3;
+    private static final int TRAINPHYS_ENGINE_COUNT_VERSION = 4;
 
     @Shadow
     public abstract CarriageContraptionEntity anyAvailableEntity();
@@ -43,6 +49,8 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
     private @Nullable Integer trainphys$electricEngineCount = null;
     @Unique
     private @Nullable Integer trainphys$unverifiedElectricEngineCount = null;
+    @Unique
+    private @Nullable Set<Block> trainphys$combustionEngineBlocks = null;
     @Unique
     private boolean trainphys$engineCountsNeedRefresh = false;
 
@@ -61,10 +69,19 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
         Integer unverifiedElectricEngineCount = trainphys$getUnverifiedElectricEngineCount();
         if(unverifiedElectricEngineCount != null)
             tag.putInt("unverifiedElectricEngineCount", unverifiedElectricEngineCount);
+        Set<Block> engineBlocks = trainphys$getEngineBlocks();
+        if (engineBlocks != null) {
+            ListTag engineBlockList = new ListTag();
+            for (Block block : engineBlocks)
+                BuiltInRegistries.BLOCK.getResourceKey(block).ifPresent(key ->
+                        engineBlockList.add(StringTag.valueOf(key.location().toString())));
+            tag.put("combustionEngineBlocks", engineBlockList);
+        }
         if (!trainphys$engineCountsNeedRefresh
                 && engineCount != null
                 && electricEngineCount != null
-                && unverifiedElectricEngineCount != null)
+                && unverifiedElectricEngineCount != null
+                && engineBlocks != null)
             tag.putInt("engineCountVersion", TRAINPHYS_ENGINE_COUNT_VERSION);
     }
 
@@ -96,6 +113,18 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
                             ? tag.getInt("unverifiedElectricEngineCount")
                             : 0
             );
+            if (tag.contains("combustionEngineBlocks", CompoundTag.TAG_LIST)) {
+                ListTag engineBlockList = tag.getList("combustionEngineBlocks", Tag.TAG_STRING);
+                Set<Block> engineBlocks = new HashSet<>();
+                for (int i = 0; i < engineBlockList.size(); i++) {
+                    ResourceLocation id = ResourceLocation.tryParse(engineBlockList.getString(i));
+                    // An engine whose mod was removed also vanishes from the
+                    // contraption itself; the entity rescan settles any drift.
+                    if (id != null && BuiltInRegistries.BLOCK.containsKey(id))
+                        engineBlocks.add(BuiltInRegistries.BLOCK.get(id));
+                }
+                carriage.trainphys$setEngineBlocks(engineBlocks);
+            }
         }
         if(restoredFromContraption || tag.contains("engineCount", CompoundTag.TAG_INT)) {
             // Exact serialized counts keep legacy automated trains moving even
@@ -117,6 +146,7 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
                     .get("Blocks");
             HolderGetter<Block> blockLookup = registries.lookupOrThrow(Registries.BLOCK);
             int[] counts = new int[3];
+            Set<Block> combustionEngines = new HashSet<>();
 
             if (blocksTag instanceof CompoundTag palettedBlocks) {
                 if (!palettedBlocks.contains("Palette", Tag.TAG_LIST)
@@ -136,7 +166,7 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
                     int stateId = blockList.getCompound(i).getInt("State");
                     if (stateId < 0 || stateId >= palette.length)
                         return false;
-                    trainphys$countEngineState(palette[stateId], counts);
+                    trainphys$countEngineState(palette[stateId], counts, combustionEngines);
                 }
             } else if (blocksTag instanceof ListTag legacyBlocks) {
                 if (legacyBlocks.isEmpty())
@@ -147,7 +177,8 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
                         return false;
                     trainphys$countEngineState(
                             NbtUtils.readBlockState(blockLookup, block.getCompound("Block")),
-                            counts
+                            counts,
+                            combustionEngines
                     );
                 }
             } else {
@@ -157,6 +188,7 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
             carriage.trainphys$setEngineCount(counts[0]);
             carriage.trainphys$setElectricEngineCount(counts[1]);
             carriage.trainphys$setUnverifiedElectricEngineCount(counts[2]);
+            carriage.trainphys$setEngineBlocks(combustionEngines);
             return true;
         } catch (RuntimeException exception) {
             // Corrupt or foreign serialized data falls back to persisted v2/v3
@@ -166,7 +198,11 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
     }
 
     @Unique
-    private static void trainphys$countEngineState(BlockState state, int[] counts) {
+    private static void trainphys$countEngineState(
+            BlockState state,
+            int[] counts,
+            Set<Block> combustionEngines
+    ) {
         if (!state.is(MOTOR_TAG))
             return;
         counts[0]++;
@@ -174,6 +210,8 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
             counts[1]++;
         else if (state.is(UNVERIFIED_ELECTRIC_MOTOR_TAG))
             counts[2]++;
+        else
+            combustionEngines.add(state.getBlock());
     }
 
     @Override
@@ -224,6 +262,17 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
     }
 
     @Override
+    public @Nullable Set<Block> trainphys$getEngineBlocks() {
+        trainphys$scanEnginesIfNeeded();
+        return trainphys$combustionEngineBlocks;
+    }
+
+    @Override
+    public void trainphys$setEngineBlocks(Set<Block> engineBlocks) {
+        trainphys$combustionEngineBlocks = engineBlocks;
+    }
+
+    @Override
     public void trainphys$markEngineCountsForRefresh() {
         trainphys$engineCountsNeedRefresh = true;
     }
@@ -233,6 +282,7 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
         if (trainphys$engineCount != null
                 && trainphys$electricEngineCount != null
                 && trainphys$unverifiedElectricEngineCount != null
+                && trainphys$combustionEngineBlocks != null
                 && !trainphys$engineCountsNeedRefresh)
             return;
 
@@ -243,6 +293,7 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
         int engineCount = 0;
         int electricEngineCount = 0;
         int unverifiedElectricEngineCount = 0;
+        Set<Block> combustionEngineBlocks = new HashSet<>();
         for (var blockInfo : entity.getContraption().getBlocks().values()) {
             if (!blockInfo.state().is(MOTOR_TAG))
                 continue;
@@ -251,11 +302,14 @@ public abstract class MixinCarriage implements IPhysicsCarriage {
                 electricEngineCount++;
             } else if (blockInfo.state().is(UNVERIFIED_ELECTRIC_MOTOR_TAG)) {
                 unverifiedElectricEngineCount++;
+            } else {
+                combustionEngineBlocks.add(blockInfo.state().getBlock());
             }
         }
         trainphys$engineCount = engineCount;
         trainphys$electricEngineCount = electricEngineCount;
         trainphys$unverifiedElectricEngineCount = unverifiedElectricEngineCount;
+        trainphys$combustionEngineBlocks = combustionEngineBlocks;
         trainphys$engineCountsNeedRefresh = false;
     }
 }

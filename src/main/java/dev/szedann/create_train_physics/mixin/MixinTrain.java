@@ -18,6 +18,7 @@ import dev.szedann.create_train_physics.accessors.IPhysicsCarriage;
 import dev.szedann.create_train_physics.accessors.IPhysicsTrain;
 import dev.szedann.create_train_physics.compat.ElectroEnergeticsCompat;
 import dev.szedann.create_train_physics.compat.SteamNRailsCompat;
+import dev.szedann.create_train_physics.physics.EngineFuelRestrictions;
 import dev.szedann.create_train_physics.physics.TractionPolicy;
 import dev.szedann.create_train_physics.physics.TrainFuelLedger;
 import dev.szedann.create_train_physics.physics.TrainFuelSelection;
@@ -31,8 +32,12 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.util.Mth;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.items.ItemHandlerHelper;
+import org.jetbrains.annotations.Nullable;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -42,6 +47,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.Collections;
+import java.util.function.Predicate;
+import com.google.common.collect.ImmutableMap;
+import com.simibubi.create.api.contraption.storage.item.MountedItemStorage;
+import com.simibubi.create.content.trains.entity.CarriageContraptionEntity;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate.StructureBlockInfo;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -296,6 +308,25 @@ public abstract class MixinTrain implements IPhysicsTrain {
                 .sum();
         return (int) Math.min(Integer.MAX_VALUE, count);
     }
+
+    /**
+     * Union of every carriage's combustion engine blocks. Null as soon as any
+     * carriage's identity is unknown (rescan pending), so restrictions fail
+     * open instead of starving a train over incomplete knowledge.
+     */
+    @Unique
+    private @Nullable Set<Block> railways$getCombustionEngineBlocks() {
+        Set<Block> engineBlocks = new HashSet<>();
+        for (Carriage carriage : carriages) {
+            Set<Block> carriageBlocks =
+                    ((IPhysicsCarriage) carriage).trainphys$getEngineBlocks();
+            if (carriageBlocks == null)
+                return null;
+            engineBlocks.addAll(carriageBlocks);
+        }
+        return engineBlocks;
+    }
+
 
     @Unique
     private int railways$getPower(){
@@ -740,12 +771,125 @@ public abstract class MixinTrain implements IPhysicsTrain {
         // S&R normally drains every liquid-fuel carriage and then lets Create
         // consume a solid item as well. Acquire one liquid portion ourselves
         // and end this refill event before either duplicate path can run.
-        int liquidFuelTicks = SteamNRailsCompat.drainOneLiquidFuel(railways$self());
+        EngineFuelRestrictions.Policy fuelPolicy = EngineFuelRestrictions.resolve(
+                railways$getCombustionEngineBlocks()
+        );
+        int liquidFuelTicks = SteamNRailsCompat.drainOneLiquidFuel(
+                railways$self(),
+                fuelPolicy
+        );
         if (liquidFuelTicks > 0) {
             fuelTicks = liquidFuelTicks;
             trainphys$finishFuelAcquisition();
             ci.cancel();
+            return;
         }
+        if (fuelPolicy != null) {
+            // A restricted train owns its whole refill event: falling through
+            // would let S&R's generic drain and Create's unfiltered item scan
+            // fuel it with fluids and items no engine aboard accepts.
+            fuelTicks = trainphys$scanAllowedSolidFuel(fuelPolicy);
+            trainphys$finishFuelAcquisition();
+            ci.cancel();
+        } else if (!"*".equals(Config.itemFuelStorageCustomName)) {
+            // The storage-name filter also applies without restrictions: own
+            // the solid refill so vanilla's unfiltered scan cannot consume
+            // from storages the filter excludes.
+            fuelTicks = trainphys$scanSolidFuel(stack -> true);
+            trainphys$finishFuelAcquisition();
+            ci.cancel();
+        }
+    }
+
+    /**
+     * Priority-ordered solid fallback: groups highest-first, item tiers in
+     * array order, each train-wide — mirroring the liquid walk, and only
+     * after it found nothing. Wildcard groups accept any burnable item.
+     * Only runs for restricted trains; vanilla's own loop still handles
+     * every unrestricted one.
+     */
+    @Unique
+    private int trainphys$scanAllowedSolidFuel(EngineFuelRestrictions.Policy policy) {
+        for (int group = 0; group < policy.groupCount(); group++) {
+            if (policy.isWildcardGroup(group)) {
+                int acquiredTicks = trainphys$scanSolidFuel(stack -> true);
+                if (acquiredTicks > 0)
+                    return acquiredTicks;
+                continue;
+            }
+            for (int tier = 0; tier < policy.itemTierCount(group); tier++) {
+                int groupIndex = group;
+                int tierIndex = tier;
+                int acquiredTicks = trainphys$scanSolidFuel(
+                        stack -> policy.itemMatchesTier(stack, groupIndex, tierIndex)
+                );
+                if (acquiredTicks > 0)
+                    return acquiredTicks;
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * Applies itemFuelStorageCustomName: with the default "*" every
+     * fuel-eligible storage passes through unchanged; otherwise only storage
+     * blocks anvil-renamed to exactly the configured text remain. Plain
+     * renames in any language match; styled JSON names do not. Fails closed
+     * when the carriage entity is unavailable — if names cannot be verified,
+     * cargo must not be consumed.
+     */
+    @Unique
+    private @Nullable MountedItemStorageWrapper trainphys$namedFuelStorage(Carriage carriage) {
+        MountedItemStorageWrapper fuelItems = carriage.storage.getFuelItems();
+        String required = Config.itemFuelStorageCustomName;
+        if (fuelItems == null || required == null || required.isEmpty() || required.equals("*"))
+            return fuelItems;
+
+        CarriageContraptionEntity entity = carriage.anyAvailableEntity();
+        if (entity == null || entity.getContraption() == null)
+            return null;
+
+        String quoted = "\"" + required + "\"";
+        ImmutableMap.Builder<BlockPos, MountedItemStorage> named = ImmutableMap.builder();
+        for (Map.Entry<BlockPos, MountedItemStorage> storage : fuelItems.storages.entrySet()) {
+            StructureBlockInfo info = entity.getContraption().getBlocks().get(storage.getKey());
+            if (info == null || info.nbt() == null)
+                continue;
+            String customName = info.nbt().getString("CustomName");
+            if (customName.equals(quoted) || customName.equals(required))
+                named.put(storage.getKey(), storage.getValue());
+        }
+        ImmutableMap<BlockPos, MountedItemStorage> filtered = named.build();
+        return filtered.isEmpty() ? null : new MountedItemStorageWrapper(filtered);
+    }
+
+    /** Mirror of Create's solid-fuel scan in burnFuel, with an entitlement filter. */
+    @Unique
+    private int trainphys$scanSolidFuel(Predicate<ItemStack> entitled) {
+        boolean iterateFromBack = speed < 0;
+        int carriageCount = carriages.size();
+        for (int index = 0; index < carriageCount; index++) {
+            int i = iterateFromBack ? carriageCount - 1 - index : index;
+            Carriage carriage = carriages.get(i);
+            MountedItemStorageWrapper fuelItems = trainphys$namedFuelStorage(carriage);
+            if (fuelItems == null)
+                continue;
+            for (int slot = 0; slot < fuelItems.getSlots(); slot++) {
+                ItemStack stack = fuelItems.extractItem(slot, 1, true);
+                if (!entitled.test(stack))
+                    continue;
+                int burnTime = stack.getBurnTime(null);
+                if (burnTime <= 0)
+                    continue;
+                stack = fuelItems.extractItem(slot, 1, false);
+                int acquiredTicks = burnTime * stack.getCount();
+                ItemStack containerItem = stack.getCraftingRemainingItem();
+                if (!containerItem.isEmpty())
+                    ItemHandlerHelper.insertItemStacked(fuelItems, containerItem, false);
+                return acquiredTicks;
+            }
+        }
+        return 0;
     }
 
     @Inject(method = "burnFuel", at = @At("RETURN"))

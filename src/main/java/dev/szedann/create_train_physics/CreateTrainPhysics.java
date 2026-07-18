@@ -1,6 +1,7 @@
 package dev.szedann.create_train_physics;
 
 import com.mojang.logging.LogUtils;
+import dev.szedann.create_train_physics.physics.EngineFuelRestrictions;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -19,6 +20,7 @@ import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.AddPackFindersEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.registries.datamaps.RegisterDataMapTypesEvent;
 import org.slf4j.Logger;
 
 // The value here should match an entry in the META-INF/neoforge.mods.toml file
@@ -83,8 +85,13 @@ public class CreateTrainPhysics {
 //        ITEMS.register(modEventBus);
         NeoForge.EVENT_BUS.register(this);
         modEventBus.addListener(CreateTrainPhysics::addPackFinders);
+        modEventBus.addListener(CreateTrainPhysics::registerDataMaps);
 
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
+    }
+
+    private static void registerDataMaps(RegisterDataMapTypesEvent event) {
+        event.register(EngineFuelRestrictions.TYPE);
     }
 
     private static void addPackFinders(AddPackFindersEvent event) {
