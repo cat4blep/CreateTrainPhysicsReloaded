@@ -37,6 +37,14 @@
     {
       "id": "tfmg:simple_large_engine",
       "required": false
+    },
+    {
+      "id": "petrochem:medium_engine",
+      "required": false
+    },
+    {
+      "id": "petrochem:small_engine",
+      "required": false
     }
   ]
 }

@@ -63,7 +63,9 @@ public class TPBlockTagProvider extends BlockTagsProvider {
                 .addOptional(ResourceLocation.fromNamespaceAndPath("tfmg","regular_engine"))
                 .addOptional(ResourceLocation.fromNamespaceAndPath("tfmg","radial_engine"))
                 .addOptional(ResourceLocation.fromNamespaceAndPath("tfmg","large_engine"))
-                .addOptional(ResourceLocation.fromNamespaceAndPath("tfmg","simple_large_engine"));
+                .addOptional(ResourceLocation.fromNamespaceAndPath("tfmg","simple_large_engine"))
+                .addOptional(ResourceLocation.fromNamespaceAndPath("petrochem","medium_engine"))
+                .addOptional(ResourceLocation.fromNamespaceAndPath("petrochem","small_engine"));
 
     }
 }
