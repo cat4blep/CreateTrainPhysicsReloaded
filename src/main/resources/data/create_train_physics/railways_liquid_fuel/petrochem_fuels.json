@@ -1,0 +1,6 @@
+{
+  "fluids": [
+    "#create_train_physics:petrochem_train_fuels"
+  ],
+  "fuel_ticks": 500
+}

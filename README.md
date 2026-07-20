@@ -71,6 +71,11 @@ large modpacks, and automated railway networks.
 - With Steam 'n' Rails installed, each refill uses exactly one source: the first
   suitable liquid-fuel carriage, or one solid item when no liquid fuel is
   available. Liquid and solid fuel are no longer consumed together.
+- Different combustion-engine types keep separate fuel supplies. Fuel accepted
+  by one engine can no longer provide power to an incompatible engine elsewhere
+  on the same train.
+- Item fuel can optionally be limited to mounted storage with one exact custom
+  name, including while an automated train is in an unloaded chunk.
 - Automated trains once again respect signals and stop for a red signal.
 - An optional automatic handbrake prevents unattended trains from rolling away
   and holds scheduled trains while they are waiting.
@@ -122,6 +127,7 @@ A higher-priority user resource pack can still replace these sounds.
 | Create: Diesel Generators | Diesel Engine, Large Diesel Engine, and Huge Diesel Engine |
 | Create: Power Grid | Electric Motor and Constant Speed Motor |
 | The Factory Must Grow | Turbine, regular, radial, large, simple large, electric, and heavy electric engines |
+| Petrochem | Gasoline and Diesel Engines, with their matching liquid fuels kept separate |
 | Steam 'n' Rails | Handcars retain their original behaviour; liquid fuel has priority without double-consuming solid fuel or draining several carriages; Create steam engines can be mounted directly on S&R fuel tanks when building a locomotive |
 
 Modpack authors can add more engine blocks through the
@@ -129,6 +135,32 @@ Modpack authors can add more engine blocks through the
 live power API should also be added to
 `create_train_physics:unverified_electric_train_motor` so they never consume
 solid or liquid fuel.
+
+### Fuel profiles for modpacks
+
+Modpack authors can restrict each combustion-engine block to an ordered list of
+accepted fluids and items with the NeoForge block data map
+`create_train_physics:engine_fuels`. Put it at
+`data/create_train_physics/data_maps/block/engine_fuels.json` in a data pack.
+A copyable [example](https://github.com/cat4blep/CreateTrainPhysicsReloaded/blob/main/docs/examples/engine_fuels.json)
+shows exact IDs, tags, priorities, and the final `"*"` fallback.
+
+Each engine entry supports:
+
+- `fluids`: ordered fluid IDs, `#fluid_tags`, or `"*"`;
+- `items`: ordered item IDs, `#item_tags`, or `"*"`;
+- `priority`: engines with a higher number try to refill first.
+
+A missing or empty `fluids`/`items` list accepts no fuel of that kind. An engine
+without an entry remains unrestricted for backward compatibility. If `"*"` is
+used, it must be the last value in its list. When a higher-priority data pack
+defines the same engine block, its whole entry replaces the lower pack's entry;
+copy any lower-pack values you still want to keep.
+
+Petrochem support is included by default: its Gasoline Engine accepts gasoline
+or kerosene, while its Diesel Engine accepts diesel, fuel oil, or petroleum.
+Those fluids are also registered as Steam 'n' Rails liquid train fuel when both
+add-ons are installed.
 
 <details>
 <summary><strong>Compatibility limitation for non-C:EE electric motors</strong></summary>
@@ -159,6 +191,7 @@ The common configuration is created at
 | `enginePower` | Base power of each recognized engine | `200 kW` |
 | `fueledEnginePower` | Power of each ordinary engine while real fuel is available | `200 kW` |
 | `automaticHandbrake` | Brakes unattended trains and holds automated trains at a requested stop | `true` |
+| `itemFuelStorageCustomName` | Uses item fuel only from mounted storage with this exact, case-sensitive custom name; `*` allows every storage | `*` |
 
 Adding more engines increases total available power, but it does not bypass
 Create's configured top-speed limit or the safe speed of a tight curve.

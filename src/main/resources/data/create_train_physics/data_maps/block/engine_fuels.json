@@ -1,0 +1,27 @@
+{
+  "neoforge:conditions": [
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "petrochem"
+    }
+  ],
+  "values": {
+    "petrochem:small_engine": {
+      "fluids": [
+        "petrochem:gasoline",
+        "petrochem:kerosene"
+      ],
+      "items": [],
+      "priority": 100
+    },
+    "petrochem:medium_engine": {
+      "fluids": [
+        "petrochem:diesel",
+        "petrochem:fuel_oil",
+        "petrochem:petroleum"
+      ],
+      "items": [],
+      "priority": 100
+    }
+  }
+}

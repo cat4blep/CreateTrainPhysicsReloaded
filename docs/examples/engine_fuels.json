@@ -1,0 +1,23 @@
+{
+  "values": {
+    "examplemod:diesel_engine": {
+      "fluids": [
+        "#c:diesel",
+        "examplemod:synthetic_diesel"
+      ],
+      "items": [],
+      "priority": 100
+    },
+    "examplemod:multifuel_engine": {
+      "fluids": [
+        "#c:fuel",
+        "*"
+      ],
+      "items": [
+        "minecraft:coal",
+        "#minecraft:coals"
+      ],
+      "priority": 50
+    }
+  }
+}

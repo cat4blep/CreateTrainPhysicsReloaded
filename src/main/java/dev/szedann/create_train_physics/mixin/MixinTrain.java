@@ -1,10 +1,8 @@
 package dev.szedann.create_train_physics.mixin;
 
-import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.simibubi.create.Create;
-import com.simibubi.create.api.contraption.storage.item.MountedItemStorageWrapper;
 import com.simibubi.create.content.trains.entity.Carriage;
 import com.simibubi.create.content.trains.entity.Navigation;
 import com.simibubi.create.content.trains.entity.Train;
@@ -18,10 +16,13 @@ import dev.szedann.create_train_physics.accessors.IPhysicsCarriage;
 import dev.szedann.create_train_physics.accessors.IPhysicsTrain;
 import dev.szedann.create_train_physics.compat.ElectroEnergeticsCompat;
 import dev.szedann.create_train_physics.compat.SteamNRailsCompat;
+import dev.szedann.create_train_physics.compat.TrainItemFuelHandler;
+import dev.szedann.create_train_physics.physics.EngineFuelRestrictions;
+import dev.szedann.create_train_physics.physics.EngineFuelState;
+import dev.szedann.create_train_physics.physics.FuelKey;
 import dev.szedann.create_train_physics.physics.TractionPolicy;
-import dev.szedann.create_train_physics.physics.TrainFuelLedger;
-import dev.szedann.create_train_physics.physics.TrainFuelSelection;
 import dev.szedann.create_train_physics.physics.TrainPhysicsMath;
+import dev.szedann.create_train_physics.physics.TrainFuelUpdateGate;
 import dev.szedann.create_train_physics.physics.TrainPowerPolicy;
 import net.createmod.catnip.data.Iterate;
 import net.createmod.catnip.data.Pair;
@@ -29,10 +30,15 @@ import net.createmod.catnip.math.VecHelper;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.server.ServerLifecycleHooks;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -42,9 +48,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -94,6 +102,9 @@ public abstract class MixinTrain implements IPhysicsTrain {
     public abstract void crash();
 
     @Unique private double railways$rollingResistanceCoefficient(){ return 0.001; }
+    @Unique private static final int TRAINPHYS_JOULES_PER_FUEL_TICK = 15_000;
+    @Unique private static final String TRAINPHYS_UNKNOWN_COMBUSTION =
+            "create_train_physics:unknown_combustion";
     @Unique private double railways$frictionCoefficient(){
         return 0.4;
 //        return carriages.getFirst().leadingBogey().leading().edge.getTrackMaterial().trackType
@@ -101,12 +112,12 @@ public abstract class MixinTrain implements IPhysicsTrain {
 //                ? 0.8
 //                : 0.4;
     }
-    @Unique private double railways$powerUsage = 0;
+    @Unique private Map<String, Double> trainphys$fuelEnergyUsed = Map.of();
+    @Unique private int trainphys$syncedPowerWatts = -1;
     //    @Unique private boolean railways$isRaining = false;
-    @Unique private double railways$energyUsed = 0;
-    @Unique private boolean trainphys$combustionFuelActive = false;
-    @Unique private int trainphys$isolatedCombustionFuelTicks = 0;
-    @Unique private int trainphys$pendingElectricLease = -1;
+    @Unique private EngineFuelState trainphys$fuelState = new EngineFuelState();
+    @Unique private TrainFuelUpdateGate trainphys$fuelUpdateGate =
+            new TrainFuelUpdateGate();
 
     @WrapMethod(method = "collideWithOtherTrains")
     public void collideWithOtherTrains(Level level, Carriage carriage, Operation<Void> original) {
@@ -298,24 +309,67 @@ public abstract class MixinTrain implements IPhysicsTrain {
     }
 
     @Unique
-    private int railways$getPower(){
+    private Map<String, Integer> trainphys$getCombustionEngineCounts() {
+        Map<String, Integer> counts = new HashMap<>();
+        for (Carriage carriage : carriages) {
+            Map<String, Integer> carriageCounts =
+                    ((IPhysicsCarriage) carriage).trainphys$getCombustionEngineCounts();
+            if (carriageCounts == null)
+                return trainphys$unknownCombustionCounts();
+            for (Map.Entry<String, Integer> entry : carriageCounts.entrySet()) {
+                if (entry.getKey() == null || entry.getValue() == null || entry.getValue() <= 0)
+                    continue;
+                counts.merge(entry.getKey(), entry.getValue(), MixinTrain::trainphys$saturatedAdd);
+            }
+        }
+        return Map.copyOf(counts);
+    }
+
+    @Unique
+    private Map<String, Integer> trainphys$unknownCombustionCounts() {
         int allEngines = railways$getEngineCount();
-        int verifiedElectricEngines = Math.min(
-                railways$getElectricEngineCount(),
-                allEngines
-        );
-        int unverifiedElectricEngines = Math.min(
+        int verifiedElectric = Math.min(railways$getElectricEngineCount(), allEngines);
+        int unverifiedElectric = Math.min(
                 railways$getUnverifiedElectricEngineCount(),
-                allEngines - verifiedElectricEngines
+                allEngines - verifiedElectric
         );
-        boolean electricPowered = verifiedElectricEngines > 0
+        int combustion = allEngines - verifiedElectric - unverifiedElectric;
+        return combustion > 0
+                ? Map.of(TRAINPHYS_UNKNOWN_COMBUSTION, combustion)
+                : Map.of();
+    }
+
+    @Unique
+    private static int trainphys$saturatedAdd(int left, int right) {
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(0, (long) left + right));
+    }
+
+    @Unique
+    private TrainPowerPolicy.PowerBreakdown trainphys$getPowerBreakdown() {
+        if (trainphys$syncedPowerWatts >= 0)
+            return TrainPowerPolicy.syncedPowerBreakdown(trainphys$syncedPowerWatts);
+
+        return trainphys$calculatePowerBreakdown();
+    }
+
+    @Unique
+    private TrainPowerPolicy.PowerBreakdown trainphys$calculatePowerBreakdown() {
+        Map<String, Integer> combustionCounts = trainphys$getCombustionEngineCounts();
+        trainphys$fuelState.reconcile(combustionCounts);
+        EngineFuelRestrictions.Policy policy = EngineFuelRestrictions.resolve(combustionCounts);
+        trainphys$fuelState.reconcileFuelRules(policy::accepts);
+
+        int verifiedElectric = railways$getElectricEngineCount();
+        int unverifiedElectric = railways$getUnverifiedElectricEngineCount();
+        boolean electricPowered = verifiedElectric > 0
                 && ElectroEnergeticsCompat.isPowered(railways$self());
-        return TrainPowerPolicy.availablePowerWatts(
-                allEngines,
-                verifiedElectricEngines,
-                unverifiedElectricEngines,
+        Set<String> fueledTypes = trainphys$fuelState.fueledEngineTypes(combustionCounts.keySet());
+        return TrainPowerPolicy.powerBreakdown(
+                combustionCounts,
+                fueledTypes,
+                verifiedElectric,
+                unverifiedElectric,
                 Config.requireFuel,
-                railways$hasCombustionFuel(),
                 electricPowered,
                 Config.enginePower,
                 Config.fueledEnginePower
@@ -323,54 +377,23 @@ public abstract class MixinTrain implements IPhysicsTrain {
     }
 
     @Unique
-    private int railways$getCombustionPower() {
-        int allEngines = railways$getEngineCount();
-        int verifiedElectricEngines = Math.min(
-                railways$getElectricEngineCount(),
-                allEngines
-        );
-        int unverifiedElectricEngines = Math.min(
-                railways$getUnverifiedElectricEngineCount(),
-                allEngines - verifiedElectricEngines
-        );
-        int combustionEngines = allEngines
-                - verifiedElectricEngines
-                - unverifiedElectricEngines;
-        return TrainPowerPolicy.availablePowerWatts(
-                combustionEngines,
-                0,
-                0,
-                Config.requireFuel,
-                railways$hasCombustionFuel(),
-                false,
-                Config.enginePower,
-                Config.fueledEnginePower
-        );
+    private int railways$getPower(){
+        return trainphys$getPowerBreakdown().totalWattsClamped();
     }
 
     @Override
-    public void trainphys$setCombustionFuelActive(boolean active) {
-        trainphys$combustionFuelActive = active;
+    public void trainphys$setEngineFuelState(EngineFuelState state) {
+        trainphys$fuelState = state == null ? new EngineFuelState() : state;
     }
 
     @Override
-    public void trainphys$setFuelEnergyDebt(double joules) {
-        railways$energyUsed = Double.isFinite(joules) ? Math.max(0, joules) : 0;
+    public int trainphys$getPowerForSync() {
+        return trainphys$calculatePowerBreakdown().totalWattsClamped();
     }
 
     @Override
-    public void trainphys$setIsolatedCombustionFuelTicks(int ticks) {
-        trainphys$isolatedCombustionFuelTicks = Math.max(0, ticks);
-    }
-
-    @Unique
-    private boolean railways$hasCombustionFuel() {
-        if (fuelTicks > TrainPowerPolicy.CEE_FUEL_TICK_LEASE)
-            trainphys$combustionFuelActive = true;
-        if (fuelTicks <= 0 && trainphys$isolatedCombustionFuelTicks <= 0)
-            trainphys$combustionFuelActive = false;
-        return trainphys$combustionFuelActive
-                && (fuelTicks > 0 || trainphys$isolatedCombustionFuelTicks > 0);
+    public void trainphys$setSyncedPower(int powerWatts) {
+        trainphys$syncedPowerWatts = Math.max(0, powerWatts);
     }
 
     @Unique
@@ -509,15 +532,12 @@ public abstract class MixinTrain implements IPhysicsTrain {
             return;
 
         ci.cancel();
-        railways$powerUsage = 0;
 
         if (!Double.isFinite(speed))
             speed = 0;
         double requestedTarget = Double.isFinite(targetSpeed) ? targetSpeed : 0;
-        int availablePower = railways$getPower();
-        int combustionPower = railways$getCombustionPower();
-        if (!railways$hasCombustionFuel())
-            combustionPower = 0;
+        TrainPowerPolicy.PowerBreakdown powerBreakdown = trainphys$getPowerBreakdown();
+        int availablePower = powerBreakdown.totalWattsClamped();
         double actualTarget = TractionPolicy.targetForTick(
                 speed,
                 requestedTarget,
@@ -559,10 +579,27 @@ public abstract class MixinTrain implements IPhysicsTrain {
         if (traction) {
             double averageVelocity = (Math.abs(speedBeforeAcceleration) + Math.abs(speed)) * 10;
             double totalPowerUsage = Math.min(availablePower, force * averageVelocity);
-            railways$powerUsage = availablePower > 0
-                    ? totalPowerUsage * combustionPower / availablePower
-                    : 0;
+            trainphys$recordFuelEnergy(powerBreakdown.allocateFuelEnergy(
+                    totalPowerUsage / 20
+            ));
         }
+    }
+
+    @Unique
+    private void trainphys$recordFuelEnergy(Map<String, Double> energyByEngine) {
+        if (energyByEngine.isEmpty())
+            return;
+        Map<String, Double> accumulated = new HashMap<>(trainphys$fuelEnergyUsed);
+        for (Map.Entry<String, Double> entry : energyByEngine.entrySet()) {
+            if (entry.getKey() == null || entry.getValue() == null
+                    || !Double.isFinite(entry.getValue()) || entry.getValue() <= 0)
+                continue;
+            accumulated.merge(entry.getKey(), entry.getValue(), (left, right) -> {
+                double sum = left + right;
+                return Double.isFinite(sum) ? sum : Double.MAX_VALUE;
+            });
+        }
+        trainphys$fuelEnergyUsed = Map.copyOf(accumulated);
     }
 
     @Unique private double railways$getGravityAcceleration(){
@@ -609,10 +646,11 @@ public abstract class MixinTrain implements IPhysicsTrain {
 
     @Inject(method = "tick", at=@At("TAIL"))
     public void tick(CallbackInfo ci) {
-        double powerUsedThisTick = railways$powerUsage;
-        railways$powerUsage = 0;
-        if (Double.isFinite(powerUsedThisTick) && powerUsedThisTick > 0)
-            railways$energyUsed += powerUsedThisTick / 20;
+        trainphys$fuelState.consumeFuelEnergy(
+                trainphys$fuelEnergyUsed,
+                TRAINPHYS_JOULES_PER_FUEL_TICK
+        );
+        trainphys$fuelEnergyUsed = Map.of();
 //        double vmax = maxTurnSpeed();
 //        carriages.forEach(c->c.forEachPresentEntity(cce->cce.getPassengers().forEach(p->{
 //            if(!(p instanceof Player player)) return;
@@ -627,16 +665,33 @@ public abstract class MixinTrain implements IPhysicsTrain {
             HolderLookup.Provider registries,
             CallbackInfoReturnable<CompoundTag> cir
     ) {
-        if (trainphys$combustionFuelActive
-                && (fuelTicks > 0 || trainphys$isolatedCombustionFuelTicks > 0))
-            cir.getReturnValue().putBoolean("TrainPhysicsCombustionFuel", true);
-        if (railways$energyUsed > 0 && Double.isFinite(railways$energyUsed))
-            cir.getReturnValue().putDouble("TrainPhysicsFuelEnergyDebt", railways$energyUsed);
-        if (trainphys$isolatedCombustionFuelTicks > 0)
-            cir.getReturnValue().putInt(
-                    "TrainPhysicsIsolatedCombustionFuel",
-                    trainphys$isolatedCombustionFuelTicks
-            );
+        CompoundTag tag = cir.getReturnValue();
+        tag.putInt("TrainPhysicsFuelStateVersion", 1);
+
+        ListTag accounts = new ListTag();
+        for (Map.Entry<String, EngineFuelState.Account> entry
+                : trainphys$fuelState.accounts().entrySet()) {
+            EngineFuelState.Account account = entry.getValue();
+            if (account.fuelTicks() <= 0 && account.energyDebtJoules() <= 0)
+                continue;
+            CompoundTag accountTag = new CompoundTag();
+            accountTag.putString("Engine", entry.getKey());
+            accountTag.putInt("Ticks", account.fuelTicks());
+            if (account.energyDebtJoules() > 0)
+                accountTag.putDouble("Debt", account.energyDebtJoules());
+            if (account.currentFuel() != null) {
+                accountTag.putString("FuelKind", account.currentFuel().kind().name());
+                accountTag.putString("Fuel", account.currentFuel().id());
+            }
+            accounts.add(accountTag);
+        }
+        tag.put("TrainPhysicsFuelAccounts", accounts);
+
+        EngineFuelState.LegacyPool legacy = trainphys$fuelState.legacyPool();
+        if (legacy.fuelTicks() > 0)
+            tag.putInt("TrainPhysicsLegacyFuelTicks", legacy.fuelTicks());
+        if (legacy.energyDebtJoules() > 0)
+            tag.putDouble("TrainPhysicsLegacyFuelDebt", legacy.energyDebtJoules());
     }
 
     @Inject(method = "read", at = @At("RETURN"))
@@ -647,152 +702,176 @@ public abstract class MixinTrain implements IPhysicsTrain {
             DimensionPalette dimensions,
             CallbackInfoReturnable<Train> cir
     ) {
-        IPhysicsTrain train = (IPhysicsTrain) cir.getReturnValue();
-        train.trainphys$setCombustionFuelActive(tag.getBoolean("TrainPhysicsCombustionFuel"));
-        train.trainphys$setFuelEnergyDebt(tag.getDouble("TrainPhysicsFuelEnergyDebt"));
-        train.trainphys$setIsolatedCombustionFuelTicks(
-                tag.getInt("TrainPhysicsIsolatedCombustionFuel")
+        Train restored = cir.getReturnValue();
+        ((IPhysicsTrain) restored).trainphys$setEngineFuelState(
+                trainphys$readEngineFuelState(tag, restored)
         );
     }
 
     @Unique
-    private void trainphys$consumeCombustionFuel(int electricEngines) {
-        boolean isolated = trainphys$isolatedCombustionFuelTicks > 0;
-        int availableTicks = isolated ? trainphys$isolatedCombustionFuelTicks : fuelTicks;
-        TrainFuelLedger.Consumption consumption = TrainFuelLedger.consume(
-                availableTicks,
-                railways$energyUsed,
-                15000 // rough estimate based on coal
+    private static EngineFuelState trainphys$readEngineFuelState(
+            CompoundTag tag,
+            Train restored
+    ) {
+        if (tag.contains("TrainPhysicsFuelStateVersion", Tag.TAG_INT)
+                || tag.contains("TrainPhysicsFuelAccounts", Tag.TAG_LIST)) {
+            Map<String, EngineFuelState.Account> accounts = new HashMap<>();
+            ListTag accountTags = tag.getList("TrainPhysicsFuelAccounts", Tag.TAG_COMPOUND);
+            for (int i = 0; i < accountTags.size(); i++) {
+                CompoundTag accountTag = accountTags.getCompound(i);
+                String engineId = accountTag.getString("Engine");
+                int ticks = Math.max(0, accountTag.getInt("Ticks"));
+                double debt = trainphys$finiteNonNegative(accountTag.getDouble("Debt"));
+                ResourceLocation parsedEngine = ResourceLocation.tryParse(engineId);
+                if (parsedEngine == null)
+                    continue;
+                try {
+                    FuelKey fuel = null;
+                    if (ticks > 0) {
+                        FuelKey.Kind kind = FuelKey.Kind.valueOf(accountTag.getString("FuelKind"));
+                        ResourceLocation fuelId = ResourceLocation.tryParse(accountTag.getString("Fuel"));
+                        if (fuelId == null)
+                            continue;
+                        fuel = new FuelKey(kind, fuelId.toString());
+                    }
+                    accounts.put(
+                            parsedEngine.toString(),
+                            new EngineFuelState.Account(ticks, debt, fuel)
+                    );
+                } catch (IllegalArgumentException ignored) {
+                    // Invalid external NBT drops only the affected account.
+                }
+            }
+            EngineFuelState.LegacyPool legacy = new EngineFuelState.LegacyPool(
+                    Math.max(0, tag.getInt("TrainPhysicsLegacyFuelTicks")),
+                    trainphys$finiteNonNegative(tag.getDouble("TrainPhysicsLegacyFuelDebt"))
+            );
+            if (restored.fuelTicks > TrainPowerPolicy.CEE_FUEL_TICK_LEASE)
+                restored.fuelTicks = 0;
+            // A live legacy balance and live per-engine balances cannot be
+            // produced by this version. Prefer the migration pool if external
+            // or partially-written NBT contains both, instead of failing world
+            // loading in the state constructor.
+            if (legacy.fuelTicks() > 0)
+                accounts.clear();
+            return new EngineFuelState(accounts, legacy);
+        }
+
+        int isolatedTicks = Math.max(0, tag.getInt("TrainPhysicsIsolatedCombustionFuel"));
+        boolean hadCombustionFuel = tag.getBoolean("TrainPhysicsCombustionFuel");
+        int sharedTicks = Math.max(0, restored.fuelTicks);
+        boolean possibleElectricLease = sharedTicks <= TrainPowerPolicy.CEE_FUEL_TICK_LEASE
+                && trainphys$hasVerifiedElectricEngine(restored);
+        int legacyTicks;
+        if (isolatedTicks > 0) {
+            legacyTicks = isolatedTicks;
+        } else if (hadCombustionFuel || (sharedTicks > 0 && !possibleElectricLease)) {
+            legacyTicks = sharedTicks;
+        } else {
+            legacyTicks = 0;
+        }
+        double legacyDebt = trainphys$finiteNonNegative(
+                tag.getDouble("TrainPhysicsFuelEnergyDebt")
         );
-        railways$energyUsed = consumption.energyJoules();
+        if (isolatedTicks == 0 && legacyTicks > 0)
+            restored.fuelTicks = 0;
+        return new EngineFuelState(
+                Map.of(),
+                new EngineFuelState.LegacyPool(legacyTicks, legacyDebt)
+        );
+    }
 
-        if (isolated) {
-            trainphys$isolatedCombustionFuelTicks = consumption.fuelTicks();
-            if (trainphys$isolatedCombustionFuelTicks <= 0)
-                trainphys$combustionFuelActive = false;
-            return;
+    @Unique
+    private static boolean trainphys$hasVerifiedElectricEngine(Train train) {
+        for (Carriage carriage : train.carriages) {
+            Integer count = ((IPhysicsCarriage) carriage).trainphys$getElectricEngineCount();
+            if (count != null && count > 0)
+                return true;
         }
+        return false;
+    }
 
-        fuelTicks = consumption.fuelTicks();
-        // Keep the final real-fuel ticks outside C:EE's shared field so its
-        // 1 -> 10 electrical lease refresh cannot turn them into free fuel.
-        if (electricEngines > 0
-                && fuelTicks > 0
-                && fuelTicks <= TrainPowerPolicy.CEE_FUEL_TICK_LEASE) {
-            trainphys$isolatedCombustionFuelTicks = fuelTicks;
-            fuelTicks = 0;
-        } else if (fuelTicks <= 0) {
-            trainphys$combustionFuelActive = false;
-        }
+    @Unique
+    private static double trainphys$finiteNonNegative(double value) {
+        return Double.isFinite(value) ? Math.max(0, value) : 0;
     }
 
     @Inject(method = "burnFuel", at = @At("HEAD"), cancellable = true)
     public void burnFuel(CallbackInfo ci) {
-        trainphys$pendingElectricLease = -1;
+        ci.cancel();
         if (railways$isHandcar()) {
-            ci.cancel();
             return;
         }
 
-        int allEngines = railways$getEngineCount();
-        int electricEngines = Math.min(
-                railways$getElectricEngineCount(),
-                allEngines
-        );
-        int unverifiedElectricEngines = Math.min(
-                railways$getUnverifiedElectricEngineCount(),
-                allEngines - electricEngines
-        );
-        int combustionEngines = allEngines
-                - electricEngines
-                - unverifiedElectricEngines;
-
-        // An electric-only train must never consume an inventory fuel item.
-        // Still let Create decrement C:EE's short compatibility lease.
-        if (combustionEngines == 0) {
-            if (electricEngines == 0
-                    || fuelTicks <= 0
-                    || fuelTicks > TrainPowerPolicy.CEE_FUEL_TICK_LEASE)
-                ci.cancel();
+        // Navigation and train-control packets can both ask Create to burn fuel
+        // during one server tick. Only the first call may decay C:EE's lease or
+        // acquire a portion, otherwise several independent accounts can refill
+        // from one logical physics tick.
+        MinecraftServer server = ServerLifecycleHooks.getCurrentServer();
+        if (server != null && !trainphys$fuelUpdateGate.enter(server.getTickCount()))
             return;
-        }
 
-        if (fuelTicks > TrainPowerPolicy.CEE_FUEL_TICK_LEASE)
-            trainphys$combustionFuelActive = true;
-
-        if (trainphys$combustionFuelActive
-                && (fuelTicks > 0 || trainphys$isolatedCombustionFuelTicks > 0)) {
-            trainphys$consumeCombustionFuel(electricEngines);
-            ci.cancel();
-            return;
-        }
-
-        // C:EE stores electrical availability in the same field Create uses
-        // for real fuel. Temporarily hide that lease so vanilla (and S&R's
-        // fluid-fuel injection) can scan a mixed train's fuel inventories.
-        trainphys$pendingElectricLease = electricEngines > 0
+        // Keep Create: Electro Energetics' short shared-field lease working,
+        // while all real combustion fuel now lives in independent accounts.
+        int electricEngines = railways$getElectricEngineCount();
+        if (electricEngines > 0
                 && fuelTicks > 0
-                && fuelTicks <= TrainPowerPolicy.CEE_FUEL_TICK_LEASE
-                ? fuelTicks
-                : 0;
-        fuelTicks = 0;
-
-        // S&R normally drains every liquid-fuel carriage and then lets Create
-        // consume a solid item as well. Acquire one liquid portion ourselves
-        // and end this refill event before either duplicate path can run.
-        int liquidFuelTicks = SteamNRailsCompat.drainOneLiquidFuel(railways$self());
-        if (liquidFuelTicks > 0) {
-            fuelTicks = liquidFuelTicks;
-            trainphys$finishFuelAcquisition();
-            ci.cancel();
-        }
-    }
-
-    @Inject(method = "burnFuel", at = @At("RETURN"))
-    public void trainphys$finishFuelInventoryScan(CallbackInfo ci) {
-        trainphys$finishFuelAcquisition();
-    }
-
-    @Unique
-    private void trainphys$finishFuelAcquisition() {
-        if (trainphys$pendingElectricLease < 0)
-            return;
-
-        if (fuelTicks > 0) {
-            trainphys$combustionFuelActive = true;
-            int electricEngines = railways$getElectricEngineCount();
-            trainphys$consumeCombustionFuel(electricEngines);
-            if (electricEngines > 0
-                    && fuelTicks == 0
-                    && (trainphys$isolatedCombustionFuelTicks > 0
-                    || !trainphys$combustionFuelActive))
-                fuelTicks = Math.max(0, trainphys$pendingElectricLease - 1);
-            trainphys$pendingElectricLease = -1;
-            return;
+                && fuelTicks <= TrainPowerPolicy.CEE_FUEL_TICK_LEASE) {
+            fuelTicks--;
+        } else if (fuelTicks != 0) {
+            fuelTicks = 0;
         }
 
-        // Match vanilla's one-tick lease decay when no real fuel was found.
-        fuelTicks = Math.max(0, trainphys$pendingElectricLease - 1);
-        trainphys$pendingElectricLease = -1;
-    }
+        Map<String, Integer> combustionCounts = trainphys$getCombustionEngineCounts();
+        if (combustionCounts.isEmpty())
+            return;
+        trainphys$fuelState.reconcile(combustionCounts);
+        EngineFuelRestrictions.Policy policy = EngineFuelRestrictions.resolve(combustionCounts);
+        trainphys$fuelState.reconcileFuelRules(policy::accepts);
+        if (trainphys$fuelState.hasActiveLegacyPool())
+            return;
 
-    /**
-     * Compatibility safety net for S&R versions whose reflective liquid bridge
-     * is unavailable: once any liquid mixin has supplied fuel, Create's solid
-     * inventory scan becomes ineligible for this refill event. The supported
-     * bridge above is still required to stop S&R from draining several tanks.
-     */
-    @ModifyExpressionValue(
-            method = "burnFuel",
-            at = @At(
-                    value = "INVOKE",
-                    target = "Lcom/simibubi/create/content/contraptions/minecart/TrainCargoManager;getFuelItems()Lcom/simibubi/create/api/contraption/storage/item/MountedItemStorageWrapper;"
-            )
-    )
-    private MountedItemStorageWrapper trainphys$skipSolidFuelAfterLiquid(
-            MountedItemStorageWrapper fuelItems
-    ) {
-        return TrainFuelSelection.mayUseSolidFuel(fuelTicks) ? fuelItems : null;
+        // Engine priority is global across fluid and item fuels. Try both kinds
+        // for one engine before moving to the next engine type; fluids retain
+        // their historical preference within that engine.
+        for (String engineId : policy.plan().engineIds()) {
+            if (!trainphys$fuelState.needsFuel(engineId))
+                continue;
+            Set<String> onlyThisEngine = Set.of(engineId);
+            SteamNRailsCompat.LiquidFuelAcquisition liquid =
+                    SteamNRailsCompat.drainOneLiquidFuel(
+                            railways$self(),
+                            policy,
+                            onlyThisEngine
+                    );
+            if (liquid != null) {
+                trainphys$fuelState.credit(
+                        liquid.engineId(),
+                        liquid.fuel(),
+                        liquid.ticks(),
+                        TRAINPHYS_JOULES_PER_FUEL_TICK
+                );
+                return;
+            }
+
+            Optional<TrainItemFuelHandler.ItemFuelAcquisition> item =
+                    TrainItemFuelHandler.acquire(
+                            railways$self(),
+                            policy,
+                            onlyThisEngine,
+                            Config.itemFuelStorageCustomName
+                    );
+            if (item.isEmpty())
+                continue;
+            TrainItemFuelHandler.ItemFuelAcquisition acquired = item.get();
+            trainphys$fuelState.credit(
+                    acquired.engineId(),
+                    acquired.fuel(),
+                    acquired.fuelTicks(),
+                    TRAINPHYS_JOULES_PER_FUEL_TICK
+            );
+            return;
+        }
     }
 
     @Unique

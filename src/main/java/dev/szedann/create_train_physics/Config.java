@@ -23,6 +23,10 @@ public class Config {
             .comment("Brake unattended trains and hold automatic trains at a requested stop")
             .define("automaticHandbrake", true);
 
+    private static final ModConfigSpec.ConfigValue<String> ITEM_FUEL_STORAGE_CUSTOM_NAME = BUILDER
+            .comment("If not \"*\", item fuel is taken only from storage blocks whose custom name exactly matches this text")
+            .define("itemFuelStorageCustomName", "*");
+
 //    public static final ModConfigSpec.ConfigValue<String> MAGIC_NUMBER_INTRODUCTION = BUILDER.comment("What you want the introduction message to be for the magic number").define("magicNumberIntroduction", "The magic number is... ");
 
     // a list of strings that are treated as resource locations for items
@@ -34,6 +38,7 @@ public class Config {
     public static int enginePower;
     public static int fueledEnginePower;
     public static boolean automaticHandbrake;
+    public static String itemFuelStorageCustomName;
 //    public static String magicNumberIntroduction;
 //    public static Set<Item> items;
 
@@ -47,6 +52,7 @@ public class Config {
         enginePower = ENGINE_POWER.get();
         fueledEnginePower = FUELED_ENGINE_POWER.get();
         automaticHandbrake = AUTOMATIC_HANDBRAKE.get();
+        itemFuelStorageCustomName = ITEM_FUEL_STORAGE_CUSTOM_NAME.get();
 //        magicNumberIntroduction = MAGIC_NUMBER_INTRODUCTION.get();
 
         // convert the list of strings into a set of items

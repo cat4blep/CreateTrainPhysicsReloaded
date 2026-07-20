@@ -1,0 +1,25 @@
+{
+  "replace": false,
+  "values": [
+    {
+      "id": "petrochem:gasoline",
+      "required": false
+    },
+    {
+      "id": "petrochem:kerosene",
+      "required": false
+    },
+    {
+      "id": "petrochem:diesel",
+      "required": false
+    },
+    {
+      "id": "petrochem:fuel_oil",
+      "required": false
+    },
+    {
+      "id": "petrochem:petroleum",
+      "required": false
+    }
+  ]
+}

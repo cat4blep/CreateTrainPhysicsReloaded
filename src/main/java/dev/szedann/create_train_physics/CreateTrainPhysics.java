@@ -1,6 +1,8 @@
 package dev.szedann.create_train_physics;
 
 import com.mojang.logging.LogUtils;
+import dev.szedann.create_train_physics.network.TrainPowerSyncPayload;
+import dev.szedann.create_train_physics.physics.EngineFuelRestrictions;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -19,6 +21,9 @@ import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.AddPackFindersEvent;
 import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
+import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
+import net.neoforged.neoforge.registries.datamaps.RegisterDataMapTypesEvent;
 import org.slf4j.Logger;
 
 // The value here should match an entry in the META-INF/neoforge.mods.toml file
@@ -83,8 +88,22 @@ public class CreateTrainPhysics {
 //        ITEMS.register(modEventBus);
         NeoForge.EVENT_BUS.register(this);
         modEventBus.addListener(CreateTrainPhysics::addPackFinders);
+        modEventBus.addListener(CreateTrainPhysics::registerDataMaps);
+        modEventBus.addListener(CreateTrainPhysics::registerPayloadHandlers);
 
         modContainer.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
+    }
+
+    private static void registerDataMaps(RegisterDataMapTypesEvent event) {
+        event.register(EngineFuelRestrictions.TYPE);
+    }
+
+    private static void registerPayloadHandlers(RegisterPayloadHandlersEvent event) {
+        event.registrar("1").playToClient(
+                TrainPowerSyncPayload.TYPE,
+                TrainPowerSyncPayload.STREAM_CODEC,
+                TrainPowerSyncPayload::handle
+        );
     }
 
     private static void addPackFinders(AddPackFindersEvent event) {
@@ -116,6 +135,11 @@ public class CreateTrainPhysics {
     public void onServerStarting(ServerStartingEvent event) {
         // Do something when the server starts
 //        LOGGER.info("HELLO from server starting");
+    }
+
+    @SubscribeEvent
+    public void onServerTick(ServerTickEvent.Post event) {
+        TrainPowerSyncPayload.broadcast(event.getServer());
     }
 
     // You can use EventBusSubscriber to automatically register all static methods in the class annotated with @SubscribeEvent

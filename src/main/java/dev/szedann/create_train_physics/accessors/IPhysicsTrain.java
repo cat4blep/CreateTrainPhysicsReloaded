@@ -1,9 +1,9 @@
 package dev.szedann.create_train_physics.accessors;
 
+import dev.szedann.create_train_physics.physics.EngineFuelState;
+
 public interface IPhysicsTrain {
-    void trainphys$setCombustionFuelActive(boolean active);
-
-    void trainphys$setFuelEnergyDebt(double joules);
-
-    void trainphys$setIsolatedCombustionFuelTicks(int ticks);
+    void trainphys$setEngineFuelState(EngineFuelState state);
+    int trainphys$getPowerForSync();
+    void trainphys$setSyncedPower(int powerWatts);
 }
