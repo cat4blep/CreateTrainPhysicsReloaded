@@ -1,133 +1,124 @@
-# История изменений
+# Changelog
+
+## 0.2.0-beta.4
+
+- The automatic handbrake applies gradual braking to moving trains when the
+  player releases the controls.
 
 ## 0.2.0-beta.3
 
-### Топливо для разных типов двигателей
+### Engine-specific fuel
 
-- Разные типы топливных двигателей теперь используют независимые запасы. Топливо,
-  подходящее одному двигателю, больше не даёт тягу несовместимому двигателю в том
-  же составе.
-- Если поезд одновременно использует несколько совместимых видов двигателей,
-  каждый из них расходует только собственное подходящее топливо.
-- Даже если управление поездом обновляется несколько раз за игровой тик, за
-  этот тик он получает не больше одной новой порции топлива.
-- Расход учитывает всю работу поезда за тик, в том числе когда скорость
-  пересчитывается несколько раз.
-- Клиент теперь получает актуальную мощность поезда от сервера, поэтому HUD
-  правильно показывает возможности заправленного состава в сетевой игре.
-- При выборе жидкого топлива расходуется именно найденная подходящая жидкость, а
-  не другой резервуар из того же хранилища.
-- Добавлена настройка `itemFuelStorageCustomName`: предметное топливо можно брать
-  только из хранилища с указанным точным именем. Значение `*` сохраняет прежнее
-  поведение и разрешает все хранилища.
-- Выбор именованного хранилища продолжает работать для автоматических поездов в
-  незагруженных чанках.
-- Существующий запас топлива из сохранений предыдущей версии переносится без
-  размножения между разными типами двигателей.
+- Different combustion engine types keep separate fuel supplies. Fuel accepted
+  by one engine cannot power an incompatible engine on the same train.
+- When several compatible engine types run at once, each type consumes its own
+  compatible fuel.
+- A train acquires at most one new fuel portion per game tick, even if control
+  updates run more than once.
+- Fuel consumption accounts for all work during a tick, including multiple
+  speed updates.
+- The client receives current train power from the server, so the HUD displays
+  available power in multiplayer.
+- Liquid refills drain the selected compatible fluid from the matching tank.
+- The `itemFuelStorageCustomName` option limits item fuel to storage with an
+  exact name. `*` allows all storage and preserves the previous behavior.
+- Named storage selection works for automated trains in unloaded chunks.
+- Fuel saved by the previous version migrates without duplication between
+  engine types.
 
-### Petrochem и настройка сборок
+### Petrochem and modpack configuration
 
-- Добавлена поддержка бензинового и дизельного двигателей Petrochem как поездных
-  двигателей.
-- Бензиновый двигатель принимает бензин и керосин; дизельный — дизель, мазут и
-  нефть. Эти виды топлива не смешиваются между двигателями.
-- Жидкости Petrochem можно использовать в топливных цистернах Steam 'n' Rails.
-- Авторы сборок могут задавать допустимые жидкости и предметы отдельно для
-  каждого блока двигателя через data pack, включая порядок и приоритет выбора.
+- Petrochem Gasoline and Diesel Engines work as train motors.
+- The Gasoline Engine accepts gasoline and kerosene. The Diesel Engine accepts
+  diesel, fuel oil, and petroleum. The engine types keep these fuels separate.
+- Steam 'n' Rails fuel tanks accept Petrochem fluids.
+- Modpack authors can configure fluids and items for each engine block through
+  a data pack, including selection order and priority.
 
 ## 0.2.0-beta.2
 
-### Топливо и Steam 'n' Rails
+### Fuel and Steam 'n' Rails
 
-- Исправлен одновременный расход жидкого и твёрдого топлива.
-- За одно пополнение поезд теперь использует только один источник топлива.
-- При наличии подходящей жидкости используется первая подходящая топливная
-  цистерна Steam 'n' Rails. Уголь или другое предметное топливо расходуется
-  только тогда, когда подходящей жидкости нет.
-- Несколько цистерн в разных вагонах больше не теряют топливо одновременно.
-- Паровой двигатель Create теперь можно сразу установить на топливную цистерну
-  Steam 'n' Rails при постройке локомотива, без временной обычной цистерны.
-- Для совместной игры рекомендуется отключить `realisticTrains` в Steam 'n'
-  Rails и управлять требованием топлива через настройку `requireFuel` этого
-  мода.
+- Fixed simultaneous consumption of liquid and item fuel.
+- Each refill uses one fuel source.
+- A train uses the first compatible Steam 'n' Rails fuel tank when liquid fuel
+  is available. It consumes coal or other item fuel only when no compatible
+  liquid is available.
+- Fuel tanks on separate carriages no longer lose fuel at the same time.
+- Create Steam Engines can mount on Steam 'n' Rails fuel tanks during locomotive
+  construction, without a temporary standard tank.
+- For multiplayer, disable `realisticTrains` in Steam 'n' Rails and control the
+  fuel requirement with this mod's `requireFuel` option.
 
-### Электрические двигатели
+### Electric motors
 
-- Электродвигатели Create: Crafts & Additions, Create: Power Grid и The Factory
-  Must Grow больше не расходуют уголь или жидкое топливо.
-- Настройка `requireFuel` теперь применяется только к паровым двигателям и
-  двигателям внутреннего сгорания.
-- Проверка настоящего питания поезда по-прежнему доступна только для Create:
-  Electro Energetics. Электродвигатели других дополнений считаются запитанными
-  после сборки поезда, поскольку эти моды не предоставляют способ проверить их
-  сеть в движении.
+- Electric motors from Create: Crafts & Additions, Create: Power Grid, and The
+  Factory Must Grow no longer consume coal or liquid fuel.
+- The `requireFuel` option applies only to steam and combustion engines.
+- Create: Electro Energetics remains the only add-on that exposes live train
+  power. Motors from other add-ons count as powered after train assembly because
+  those add-ons do not expose their power network while the train is moving.
 
-### Надёжность
+### Reliability
 
-- Добавлены проверки выбора единственного источника топлива и раздельной работы
-  электрических и топливных двигателей.
-- Сохранённые поезда автоматически обновляют классификацию двигателей, в том
-  числе пока состав находится в незагруженном чанке.
+- Tests cover single-source fuel selection and separation between electric and
+  combustion engines.
+- Saved trains update their engine classification, including while the train is
+  in an unloaded chunk.
 
 ## 0.2.0-beta.1
 
-По сравнению с исходной версией `Szedann/CreateTrainPhysics` мод был значительно
-доработан. Ниже перечислены изменения, которые заметит обычный игрок.
+Version 0.2.0-beta.1 is a major rework of the original
+`Szedann/CreateTrainPhysics` mod. The changes below affect normal gameplay.
 
-### Физика поездов
+### Train physics
 
-- Поведение поездов при разгоне, торможении, движении под уклон и потере скорости
-  стало стабильнее и предсказуемее.
-- Теперь учитываются двигатели во всём составе, а не только в одном вагоне.
-  Несколько локомотивов действительно увеличивают доступную тягу и помогают
-  тяжёлому поезду быстрее разгоняться.
-- Исправлен расчёт безопасной скорости в поворотах.
-- Устранено зависание скорости на некоторых S-образных участках пути.
-- Улучшено поведение поездов при столкновениях и в необычных положениях на пути.
+- Train behavior during acceleration, braking, downhill travel, and speed loss
+  is more stable and predictable.
+- Engines across the full train contribute power. Multiple locomotives increase
+  available traction and help heavy trains accelerate faster.
+- Fixed safe cornering speed calculations.
+- Fixed speed stalls on some S-shaped track sections.
+- Improved train behavior during collisions and unusual positions on the track.
 
-### Топливо и мощность
+### Fuel and power
 
-- Настройка обязательного топлива теперь действительно работает: обычный
-  двигатель без топлива больше не создаёт тягу.
-- Исправлена настройка мощности двигателя, работающего на топливе.
-- Расход топлива стал соответствовать фактической работе поезда.
-- Электрические и топливные двигатели в одном составе больше не мешают работе
-  друг друга и не создают бесплатное топливо.
+- The fuel requirement works: a standard engine without fuel produces no
+  traction.
+- Fixed the power setting for fueled engines.
+- Fuel consumption follows the train's measured work.
+- Electric and combustion engines on the same train keep their power and fuel
+  handling separate and cannot create free fuel.
 
-### Автоматические поезда и ручник
+### Automated trains and handbrake
 
-- Автоматические поезда снова учитывают сигналы и останавливаются перед красным
-  светофором.
-- Добавлен автоматический ручник для оставленных без управления поездов.
-- Поезд надёжнее удерживается на месте на станции, во время ожидания и на уклоне.
-- При желании автоматический ручник можно отключить в настройках мода.
+- Automated trains obey signals and stop at red signals.
+- Added an automatic handbrake for unattended trains.
+- Trains hold position at stations, while waiting, and on slopes.
+- The mod configuration can disable the automatic handbrake.
 
 ### Create: Electro Energetics
 
-- Электродвигатели теперь создают тягу только при наличии настоящего питания:
-  от запитанной контактной сети, аккумуляторов или творческого источника.
-- Отключённый от сети или обесточенный электропоезд больше не получает тягу сам
-  по себе.
-- Поддерживаются все цветовые варианты электродвигателей, а не только красный.
-- Исправлена работа составов, в которых одновременно используются электрические
-  и обычные двигатели.
-- Четыре слишком громких и навязчивых звука электрической тяги автоматически
-  заглушены. Спокойный шум движения и ветра оставлен без изменений.
+- Electric motors produce traction only with live power from an energized
+  catenary network, batteries, or a creative power source.
+- Disconnected or unpowered electric trains produce no traction.
+- All electric motor colors receive power checks.
+- Fixed trains that combine electric and standard engines.
+- Muted four loud electric traction sounds while retaining movement and wind
+  noise.
 
-### Совместимость с дополнениями Create
+### Create add-on compatibility
 
-- Добавлена поддержка модульных, больших и огромных двигателей Create: Diesel
+- Added support for Modular, Large, and Huge Engines from Create: Diesel
   Generators.
-- Добавлена поддержка двигателей Create: Power Grid.
-- Добавлена поддержка обычных, больших и электрических двигателей The Factory
-  Must Grow.
-- Сохранена поддержка электрического двигателя Create: Crafts & Additions.
-- Дрезины Steam 'n' Rails больше не ограничиваются физикой обычного локомотива и
-  сохраняют своё исходное поведение.
+- Added support for Create: Power Grid motors.
+- Added support for standard, large, and electric engines from The Factory Must
+  Grow.
+- Retained support for the Create: Crafts & Additions electric motor.
+- Steam 'n' Rails handcars retain their original physics.
 
-### Прочее
+### Other
 
-- Улучшено сохранение данных поездов между перезапусками мира.
-- Существующие составы корректнее распознают изменившийся набор двигателей после
-  обновления модов или сборки.
-- Полностью переработана документация по поддерживаемым двигателям и настройкам.
+- Improved train data persistence across world restarts.
+- Existing trains detect engine changes after mod updates or train rebuilding.
+- Reworked documentation for supported engines and configuration.

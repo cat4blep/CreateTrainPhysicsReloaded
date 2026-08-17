@@ -17,6 +17,7 @@ import dev.szedann.create_train_physics.accessors.IPhysicsTrain;
 import dev.szedann.create_train_physics.compat.ElectroEnergeticsCompat;
 import dev.szedann.create_train_physics.compat.SteamNRailsCompat;
 import dev.szedann.create_train_physics.compat.TrainItemFuelHandler;
+import dev.szedann.create_train_physics.physics.AutomaticHandbrakePolicy;
 import dev.szedann.create_train_physics.physics.EngineFuelRestrictions;
 import dev.szedann.create_train_physics.physics.EngineFuelState;
 import dev.szedann.create_train_physics.physics.FuelKey;
@@ -227,22 +228,25 @@ public abstract class MixinTrain implements IPhysicsTrain {
         speed = resistedSpeed + gravityAcceleration;
 
         boolean unattended = navigation == null || navigation.destination == null;
-        boolean navigationHolding = !unattended && Mth.equal(targetSpeed, 0);
-        if (Config.automaticHandbrake && !wasManuallyControlled) {
+        boolean navigationRequestsStop = !unattended && Mth.equal(targetSpeed, 0);
+        // Active navigation applies service braking in approachTargetSpeed.
+        AutomaticHandbrakePolicy.Action handbrakeAction =
+                AutomaticHandbrakePolicy.actionFor(
+                        Config.automaticHandbrake,
+                        wasManuallyControlled,
+                        unattended,
+                        navigationRequestsStop,
+                        Mth.equal(speedBeforePassiveForces, 0)
+                );
+        if (handbrakeAction == AutomaticHandbrakePolicy.Action.HOLD) {
             // Static parking friction holds a stopped train even on slopes.
-            boolean parkingRequested = unattended && Mth.equal(targetSpeed, 0);
-            if (parkingRequested
-                    || ((unattended || navigationHolding) && Mth.equal(speedBeforePassiveForces, 0))) {
+            speed = 0;
+        } else if (handbrakeAction == AutomaticHandbrakePolicy.Action.SERVICE_BRAKE) {
+            double brakingAcceleration = acceleration();
+            if (Math.abs(speed) <= brakingAcceleration)
                 speed = 0;
-            } else if (unattended) {
-                // Once moving, use the configured service-brake rate. Active
-                // navigation already applied this brake in approachTargetSpeed.
-                double brakingAcceleration = acceleration();
-                if (Math.abs(speed) <= brakingAcceleration)
-                    speed = 0;
-                else
-                    speed -= Math.copySign(brakingAcceleration, speed);
-            }
+            else
+                speed -= Math.copySign(brakingAcceleration, speed);
         }
 //        carriages.forEach(carriage -> carriage.bogeys.stream().filter(Objects::nonNull).forEach(carriageBogey -> railways$applyWheelSlip(carriageBogey,.1)));
     }
